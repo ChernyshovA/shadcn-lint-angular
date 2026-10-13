@@ -46,6 +46,17 @@ export function replaceInLiteral(
   return replaced === inner ? null : `${quote}${replaced}${quote}`
 }
 
+// angular-eslint's processor lints an inline template as a file of its
+// own and moves fixes back into the .ts, but not suggestions: applied
+// there, one would rewrite the top of the file. The finding stays.
+function isInlineAngularTemplate(node: any, context: any) {
+  return (
+    node?.type === "AngularLiteral" &&
+    context.physicalFilename != null &&
+    context.physicalFilename !== context.filename
+  )
+}
+
 export function classSuggestion(
   node: any,
   context: any,
@@ -54,6 +65,7 @@ export function classSuggestion(
   messageId: string,
   data: Record<string, string>
 ) {
+  if (isInlineAngularTemplate(node, context)) return null
   const text = replaceInLiteral(node, context, token, replacement)
   if (text === null) return null
   return {

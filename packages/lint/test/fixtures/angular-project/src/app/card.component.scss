@@ -1,0 +1,36 @@
+@use "sass:math";
+@import "card-shared";
+
+// .card-commented { color: red; }
+/* .card-blocked { color: red; } */
+
+:host {
+  display: block;
+}
+
+.card {
+  padding: math.div(16px, 2);
+
+  &-header {
+    display: flex;
+  }
+
+  &__body,
+  &.is-open {
+    content: "{ .card-in-string }";
+  }
+
+  .card-title {
+    font-weight: 600;
+  }
+
+  @media (min-width: 640px) {
+    &-footer {
+      display: flex;
+    }
+  }
+}
+
+.badge-#{$tone} {
+  color: currentColor;
+}

@@ -6,6 +6,7 @@
 import { categoryOf } from "../grammar/categories"
 import { isMarkerClass, normalizeClass, splitClasses } from "../grammar/classes"
 import { didYouMean } from "../grammar/similar"
+import { angularOwnClassesOf } from "../project/angular-styles"
 import { projectClassifierFor } from "../project/namespaces"
 import { isSfc, styleClassesOf } from "../project/parser"
 import {
@@ -17,6 +18,8 @@ import {
   utilityPrefixesOf,
 } from "../project/theme"
 import { classSiteVisitors } from "../sites/collect"
+import { readerFor } from "../sites/readers"
+import { angularReader } from "../sites/readers/angular"
 import { unknownClasses } from "../tailwind/client"
 import { compileVocabularyPolicy, configErrorVisitors } from "./contracts"
 import { classSuggestions } from "./fixes"
@@ -75,10 +78,13 @@ export const noUnknownClasses = {
     const { groupOf } = projectClassifierFor(filename)
     const known = knownClassesFor(filename)
     // A single-file component's own <style> block declares classes for
-    // its template the way the theme CSS does for everything.
-    const ownClasses = isSfc(filename)
+    // its template the way the theme CSS does for everything, and so do
+    // an Angular component's styles.
+    const ownClasses: { has: (name: string) => boolean } = isSfc(filename)
       ? styleClassesOf(context.sourceCode?.text ?? "")
-      : new Set<string>()
+      : readerFor(context) === angularReader
+        ? angularOwnClassesOf(context.filename ?? filename, filename)
+        : new Set<string>()
     const themeFile = themeFileFor(filename)
     const file = themeFile ? displayPath(themeFile, context) : "your theme CSS"
     // A theme file that does not import Tailwind knows no base utilities,

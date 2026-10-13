@@ -1,6 +1,7 @@
 import { isSfc } from "../../project/parser"
 import { warnOnce } from "../../project/warn"
 import { fileOf } from "../../rules/messages"
+import { angularReader } from "./angular"
 import { jsxReader } from "./jsx"
 import { svelteReader } from "./svelte"
 import type { Visitors } from "./types"
@@ -8,7 +9,7 @@ import { vueReader } from "./vue"
 
 export type { ElementName, ExtraSite, TemplateReader, Visitors } from "./types"
 
-const readers = [jsxReader, svelteReader, vueReader]
+const readers = [jsxReader, svelteReader, vueReader, angularReader]
 
 // The parser decides: each template language has its own node types, so
 // a reader only ever meets the nodes it was written for.
@@ -17,6 +18,9 @@ export function readerFor(context: any) {
   if (services?.isSvelte) return svelteReader
   if (typeof services?.defineTemplateBodyVisitor === "function") {
     return vueReader
+  }
+  if (typeof services?.convertElementSourceSpanToLoc === "function") {
+    return angularReader
   }
   return jsxReader
 }
@@ -29,7 +33,12 @@ const CONTAINERS: Record<string, string> = {
   VExpressionContainer: "VAttribute",
 }
 
-const LITERALS = new Set(["Literal", "SvelteLiteral", "VLiteral"])
+const LITERALS = new Set([
+  "Literal",
+  "SvelteLiteral",
+  "VLiteral",
+  "AngularLiteral",
+])
 
 // One node type can carry two roles (Vue's VAttribute is an attribute
 // and a spread), so a second visitor joins the first.

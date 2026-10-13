@@ -860,6 +860,7 @@ export function collectClassStrings(
       case "Literal":
       case "SvelteLiteral":
       case "VLiteral":
+      case "AngularLiteral":
         if (typeof node.value === "string") push(node.value, node)
         return
       case "TemplateLiteral":
