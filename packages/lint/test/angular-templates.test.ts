@@ -305,6 +305,18 @@ describe("Angular templates", () => {
     ).toEqual([`shadcn/no-raw-colors: fill="#ff0000" hardcodes a color`])
   })
 
+  it("reads the SVG color attributes HTML spells with a hyphen", () => {
+    expect(
+      found(
+        `<svg><stop stop-color="#ff0000"></stop><feFlood flood-color="red"></feFlood><feDiffuseLighting lighting-color="rgb(0 0 0)"></feDiffuseLighting><stop stop-color="currentColor"></stop></svg>`
+      )
+    ).toEqual([
+      `shadcn/no-raw-colors: stop-color="#ff0000" hardcodes a color`,
+      `shadcn/no-raw-colors: flood-color="red" hardcodes a color`,
+      `shadcn/no-raw-colors: lighting-color="rgb(0 0 0)" hardcodes a color`,
+    ])
+  })
+
   it("does not take a tag for a component a .tsx file would import", () => {
     // The React fixture, whose ui directory has a Card.
     const project = path.join(PROJECT, "../project")

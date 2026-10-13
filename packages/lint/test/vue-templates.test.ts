@@ -22,6 +22,17 @@ const found = (template: string, body?: string) =>
   lint(template, body).map((m) => `${m.ruleId}: ${m.message.split(".")[0]}`)
 
 describe("Vue templates", () => {
+  it("reads an SVG color attribute spelled with a hyphen", () => {
+    expect(
+      found(
+        `<svg><stop stop-color="#ff0000" /><feFlood flood-color="red" /></svg>`
+      )
+    ).toEqual([
+      `shadcn/no-raw-colors: stop-color="#ff0000" hardcodes a color`,
+      `shadcn/no-raw-colors: flood-color="red" hardcodes a color`,
+    ])
+  })
+
   it("reports the probe from the issue the way a .tsx file does", () => {
     const messages = lint(
       `<div class="bg-red-50 text-red-800 p-[13px]" style="color: red">x</div>`
