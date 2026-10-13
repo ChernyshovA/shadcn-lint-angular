@@ -2,14 +2,20 @@ import { isSfc } from "../../project/parser"
 import { warnOnce } from "../../project/warn"
 import { fileOf } from "../../rules/messages"
 import { angularReader } from "./angular"
+import { recordFile } from "./angular-compiler"
+import { withHostBindings } from "./angular-host"
 import { jsxReader } from "./jsx"
 import { svelteReader } from "./svelte"
-import type { Visitors } from "./types"
+import type { TemplateReader, Visitors } from "./types"
 import { vueReader } from "./vue"
 
 export type { ElementName, ExtraSite, TemplateReader, Visitors } from "./types"
 
-const readers = [jsxReader, svelteReader, vueReader, angularReader]
+// A script file can declare an Angular component, whose host bindings
+// are a template of their own.
+const scriptReader = withHostBindings(jsxReader)
+
+const readers = [scriptReader, svelteReader, vueReader, angularReader]
 
 // The parser decides: each template language has its own node types, so
 // a reader only ever meets the nodes it was written for.
@@ -22,7 +28,29 @@ export function readerFor(context: any) {
   if (typeof services?.convertElementSourceSpanToLoc === "function") {
     return angularReader
   }
-  return jsxReader
+  return scriptReader
+}
+
+// Whether this class attribute takes an object with classes as keys.
+// Elsewhere an object is a classNames map, its values the classes.
+export function keysClasses(
+  reader: TemplateReader,
+  attribute: any,
+  name: string | null
+) {
+  const { classObjects } = reader
+  if (name === null) return false
+  return typeof classObjects === "function"
+    ? classObjects(attribute, name)
+    : classObjects === true && name === "class"
+}
+
+// Whether a string at this value is CSS text.
+export function readsStyleText(reader: TemplateReader, value: any) {
+  const { staticStyles } = reader
+  return typeof staticStyles === "function"
+    ? staticStyles(value)
+    : staticStyles === true
 }
 
 // The node that wraps an expression in an attribute, by the attribute
@@ -88,6 +116,23 @@ export function staticStringOf(value: any) {
     : null
 }
 
+// A node the traversal reaches twice is still one attribute.
+function once(visitors: Visitors, reader: TemplateReader): Visitors {
+  if (!reader.revisited?.some((type) => visitors[type])) return visitors
+  const out = { ...visitors }
+  const seen = new WeakSet<object>()
+  for (const type of reader.revisited) {
+    const visit = visitors[type]
+    if (!visit) continue
+    out[type] = (node) => {
+      if (seen.has(node)) return
+      seen.add(node)
+      visit(node)
+    }
+  }
+  return out
+}
+
 // What every rule's visitors go through before the linter gets them.
 //
 // Vue's template visitors only run when they are registered through the
@@ -105,7 +150,8 @@ export function withTemplates<T extends { create: (context: any) => any }>(
   return {
     ...rule,
     create(context: any) {
-      const visitors = rule.create(context)
+      recordFile(context.sourceCode?.ast, fileOf(context))
+      const visitors = once(rule.create(context), readerFor(context))
       const services = context.sourceCode?.parserServices
       const define = services?.defineTemplateBodyVisitor
       if (typeof define === "function") {

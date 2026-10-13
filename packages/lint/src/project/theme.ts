@@ -3,6 +3,7 @@
 // See docs/how-it-works.md.
 
 import * as fs from "node:fs"
+import { createRequire } from "node:module"
 import * as path from "node:path"
 
 import { normalizeClass, OPACITY_MODIFIER } from "../grammar/classes"
@@ -416,6 +417,19 @@ export function setThemeImports(fromFile: string, patterns: RegExp[]) {
   else themeImports.delete(root)
 }
 
+type EntryPoint = { file: string; written: string }
+
+// settings.shadcn.entryPoint, by project root.
+const entryPoints = new Map<string, EntryPoint>()
+
+export function setEntryPoint(fromFile: string, entry: EntryPoint | null) {
+  if (!entry && !entryPoints.size) return
+  const root = fromFile ? projectFor(fromFile)?.root : null
+  if (!root) return
+  if (entry) entryPoints.set(root, entry)
+  else entryPoints.delete(root)
+}
+
 function themeImportsOf(root: string | undefined) {
   return (root && themeImports.get(root)) || NO_IMPORTS
 }
@@ -541,12 +555,31 @@ function relativeTo(root: string, file: string) {
   return path.relative(root, file).replace(/\\/g, "/")
 }
 
-// A components.json naming a stylesheet that is not there is a wrong
-// path, not the absence of a theme: say so once and fall back to
-// discovery, so the token check does not go quiet meanwhile.
+// settings.shadcn.entryPoint, then components.json. Either naming a
+// stylesheet that is not there is a wrong path, not the absence of a
+// theme: say so once and fall back, so the token check does not go quiet
+// meanwhile.
 export function themeFileFor(fromFile: string) {
   const project = projectFor(fromFile)
   if (!project) return null
+  const entry = entryPoints.get(project.root)
+  if (entry) {
+    if (isFile(entry.file)) return entry.file
+    const configured =
+      project.cssFile && isFile(project.cssFile) ? project.cssFile : null
+    const fallback = configured ?? discoverThemeFile(project.root)
+    warnOnce(
+      `theme:missing-entry:${entry.file}`,
+      `settings.shadcn.entryPoint is ${entry.written}, which does not exist. ${
+        configured
+          ? `Using tailwind.css from components.json, ${relativeTo(project.root, configured)}, until the path is fixed.`
+          : fallback
+            ? `Using ${relativeTo(project.root, fallback)} until the path is fixed.`
+            : "No stylesheet importing Tailwind was found under the project, so no-unknown-classes reads classes with the grammar bundled with @shadcn/lint until the path is fixed."
+      }`
+    )
+    return fallback
+  }
   if (project.cssFile) {
     if (isFile(project.cssFile)) return project.cssFile
     const discovered = discoverThemeFile(project.root)
@@ -576,9 +609,14 @@ export function tailwindEntryFor(fromFile: string) {
   const project = projectFor(fromFile)
   if (!project) return file
   const discovered = discoverThemeFile(project.root)
+  const entry = entryPoints.get(project.root)
   warnOnce(
     `theme:no-tailwind:${file}`,
-    `components.json sets tailwind.css to ${relativeTo(project.root, file)}, which does not import Tailwind. ${
+    `${
+      entry?.file === file
+        ? `settings.shadcn.entryPoint is ${entry.written}`
+        : `components.json sets tailwind.css to ${relativeTo(project.root, file)}`
+    }, which does not import Tailwind. ${
       discovered
         ? `Using ${relativeTo(project.root, discovered)} to read the classes Tailwind knows until the path is fixed.`
         : "No stylesheet importing Tailwind was found under the project, so no-unknown-classes is using the grammar bundled with @shadcn/lint until the path is fixed."
@@ -609,29 +647,103 @@ function sassTailwindEntryUnder(root: string) {
 // per run.
 const entryless = new Map<string, string | null>()
 
+const WORKSPACE_FILES = [
+  "pnpm-workspace.yaml",
+  "nx.json",
+  "lerna.json",
+  "turbo.json",
+  "rush.json",
+  "angular.json",
+]
+
+function declaresWorkspaces(dir: string) {
+  try {
+    const json = JSON.parse(
+      fs.readFileSync(path.join(dir, "package.json"), "utf-8")
+    )
+    return json?.workspaces != null
+  } catch {
+    return false
+  }
+}
+
+const workspaces = new Map<string, string>()
+
+// The nearest directory, from the package up, that declares a workspace;
+// the package itself outside one.
+function workspaceRootOf(root: string) {
+  let found = workspaces.get(root)
+  if (found) return found
+  found = root
+  for (let dir = root; ; dir = path.dirname(dir)) {
+    if (
+      WORKSPACE_FILES.some((name) => isFile(path.join(dir, name))) ||
+      declaresWorkspaces(dir)
+    ) {
+      found = dir
+      break
+    }
+    if (path.dirname(dir) === dir) break
+  }
+  workspaces.set(root, found)
+  return found
+}
+
+const TAILWIND3_DIRECTIVE = /@tailwind\s+(?:base|components|utilities)\b/
+
+// Tailwind v3 is configured in JavaScript, and its stylesheets open with
+// @tailwind directives rather than importing it, so it has no entry to
+// find. Told to name one, a v3 project would only be told that it does
+// not import Tailwind.
+function isTailwind3(root: string) {
+  try {
+    const { version } = createRequire(path.join(root, "package.json"))(
+      "tailwindcss/package.json"
+    )
+    if (Number.parseInt(version, 10) < 4) return true
+  } catch {
+    // Not installed, or not where the project resolves it.
+  }
+  const files: string[] = []
+  cssFilesUnder(root, 0, files, /\.(?:css|s[ac]ss|less)$/)
+  return files.some((file) => {
+    try {
+      return TAILWIND3_DIRECTIVE.test(
+        stripComments(fs.readFileSync(file, "utf-8"))
+      )
+    } catch {
+      return false
+    }
+  })
+}
+
 // No components.json path and no stylesheet importing Tailwind: the rules
 // fall back to the bundled grammar and know no theme. Quietly, that reads
-// as a project that passed, so it is said once per project.
+// as a project that passed, so it is said once, for the first such
+// package of a workspace: in a monorepo every package without a
+// stylesheet of its own would say it again.
 export function warnNoTailwindEntry(fromFile: string) {
   const project = projectFor(fromFile)
-  if (!project || project.cssFile) return
+  if (!project || project.cssFile || entryPoints.has(project.root)) return
   let message = entryless.get(project.root)
   if (message === undefined) {
     message = noEntryMessage(project.root)
     entryless.set(project.root, message)
   }
-  if (message) warnOnce(`theme:no-entry:${project.root}`, message)
+  if (message) {
+    warnOnce(`theme:no-entry:${workspaceRootOf(project.root)}`, message)
+  }
 }
 
 function noEntryMessage(root: string) {
-  if (discoverThemeFile(root)) return null
+  if (discoverThemeFile(root) || isTailwind3(root)) return null
   const where = path.relative(process.cwd(), root) || "."
   const sass = sassTailwindEntryUnder(root)
   const fallback =
     "so no-unknown-classes reads classes with the grammar bundled with @shadcn/lint, and the project's theme is not read"
   return sass
-    ? `${relativeTo(root, sass)} imports Tailwind, but a Sass file is not read as the Tailwind entry and no CSS file under ${where} imports it, ${fallback}. Set tailwind.css in components.json to a CSS file that imports Tailwind and the same plugins.`
-    : `No stylesheet importing Tailwind was found under ${where}, ${fallback}. Set tailwind.css in components.json to the stylesheet that imports Tailwind.`
+    ? `${relativeTo(root, sass)} imports Tailwind, but a Sass file is not read as the Tailwind entry and no CSS file under ${where} imports it, ${fallback}. Tailwind v4 is not meant to be used with Sass: write a CSS file that imports Tailwind, the theme and the same plugins, and set settings.shadcn.entryPoint to it.`
+    : `No stylesheet importing Tailwind was found under ${where}, ${fallback}. Set settings.shadcn.entryPoint to the stylesheet that imports Tailwind.`
 }
 
 export function tailwindPrefixFor(fromFile: string) {

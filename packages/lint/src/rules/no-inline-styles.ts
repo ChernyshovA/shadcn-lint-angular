@@ -19,6 +19,7 @@ import {
   isContainer,
   isMarkupLiteral,
   readerFor,
+  readsStyleText,
   type Visitors,
 } from "../sites/readers"
 import {
@@ -403,7 +404,7 @@ export const noInlineStyles = {
       ) {
         return
       }
-      if (reader.staticStyles) {
+      if (readsStyleText(reader, expr)) {
         const css = cssTextOf(expr)
         if (css !== null) return judgeDeclarations(css, reportAt, component)
       }
@@ -488,7 +489,7 @@ export const noInlineStyles = {
             new Set(),
             elementName(node)
           )
-        } else if (reader.staticStyles && value) {
+        } else if (value && readsStyleText(reader, value)) {
           check(value, value, new Set(), elementName(node))
         }
       })

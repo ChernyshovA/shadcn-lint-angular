@@ -2,7 +2,9 @@
 
 `@shadcn/lint` reads Angular templates under ESLint with
 `@angular-eslint/template-parser`: `.html` files, and inline `template:`
-strings through angular-eslint's processor.
+strings through angular-eslint's processor. In component files it reads
+the `host` bindings of `@Component` and `@Directive`, and class helpers
+such as `cva`.
 
 The examples enable the four rules a static class or style reaches.
 Requires Node.js 20.19 or later.
@@ -16,7 +18,7 @@ npm install -D @shadcn/lint eslint angular-eslint typescript-eslint
 ```
 
 Create `eslint.config.mjs`. If `ng add angular-eslint` already wrote one,
-it has both blocks: add the plugin and rules to its `**/*.html` block.
+it has both blocks: add the plugin and rules to each.
 
 ```js
 import { plugin as shadcn } from "@shadcn/lint"
@@ -24,25 +26,33 @@ import angular from "angular-eslint"
 import { defineConfig } from "eslint/config"
 import tseslint from "typescript-eslint"
 
+const rules = {
+  "shadcn/no-raw-colors": "error",
+  "shadcn/no-arbitrary-values": "error",
+  "shadcn/no-unknown-classes": "error",
+  "shadcn/no-inline-styles": "error",
+}
+
 export default defineConfig([
   {
     files: ["**/*.ts"],
     languageOptions: { parser: tseslint.parser },
     processor: angular.processInlineTemplates,
+    plugins: { shadcn },
+    rules,
   },
   {
     files: ["**/*.html"],
     languageOptions: { parser: angular.templateParser },
     plugins: { shadcn },
-    rules: {
-      "shadcn/no-raw-colors": "error",
-      "shadcn/no-arbitrary-values": "error",
-      "shadcn/no-unknown-classes": "error",
-      "shadcn/no-inline-styles": "error",
-    },
+    rules,
   },
 ])
 ```
+
+The `**/*.html` block reads templates. The `**/*.ts` block reads host
+bindings and class helpers in component files; without it, only
+templates are read.
 
 ```bash
 npx eslint .
@@ -58,6 +68,40 @@ A finding in an inline template is reported at its place in the `.ts`,
 but without a suggestion. The processor moves fixes back into the `.ts`
 and leaves suggestions where they were, so an applied one would rewrite
 the top of the file instead of the class.
+
+### Tailwind entry
+
+`no-unknown-classes` asks the project's Tailwind which classes exist,
+and `no-raw-colors` reads the theme's tokens, from the stylesheet that
+imports Tailwind: a CSS file under the project, or the one
+`tailwind.css` in `components.json` names.
+
+An Angular app often imports Tailwind from `src/styles.scss` instead.
+Tailwind v4 is not meant to be used with Sass
+([Compatibility](https://tailwindcss.com/docs/compatibility)), and a
+Sass file is not read as the entry. Write the entry as CSS, with the
+theme and the same plugins, such as `src/tailwind.css`:
+
+```css
+@import "tailwindcss";
+@import "./styles/theme.css";
+@plugin "tailwindcss-primeui";
+```
+
+and name it in the settings, as a path from where ESLint runs. This works
+without `components.json`:
+
+```js
+export default defineConfig([
+  { settings: { shadcn: { entryPoint: "src/tailwind.css" } } },
+  // the blocks above
+])
+```
+
+The global `.scss` does not replace it: its classes are read as
+[global styles](#global-styles), but it is not asked which Tailwind
+classes exist. Without an entry, the rule says so once per workspace, on
+stderr, and the grammar bundled with `@shadcn/lint` answers instead.
 
 ## Oxlint
 
@@ -101,6 +145,33 @@ An attribute whose name ends in `Class` or `Classes` is read the way JSX
 reads `labelClassName`. Elements inside `@if`, `@for`, `@switch`,
 `@defer`, `<ng-template>`, `<ng-container>`, `*ngIf` and `*ngFor` are
 read like any other.
+
+### Bindings
+
+| Binding                                              | Read as                         |
+| ---------------------------------------------------- | ------------------------------- |
+| `[class]="on ? 'p-4' : 'p-2'"`, `[ngClass]="'p-4'"`  | the class strings it holds      |
+| `[class]="{ 'p-4': on }"`, `[ngClass]="{ ... }"`     | the keys, as classes            |
+| `[class.p-4]="on"`                                   | the class the key names         |
+| `class="p-4 {{ tone }}"`                             | the text around the braces      |
+| `[routerLinkActive]="..."`                           | the classes the router adds     |
+| `[styleClass]="..."`, `[panelClass]="{ ... }"`       | like `[class]`                  |
+| `[style]="'color: red'"`, `[ngStyle]="{ color: c }"` | a style, property by property   |
+| `[style.color]="c"`, `[style.width.px]="w"`          | a style that sets that property |
+| `[attr.fill]="'#f00'"`, `[attr.class]="..."`         | like the attribute it sets      |
+
+An input whose name ends in `Class` or `Classes`, PrimeNG's
+`[styleClass]` or Material's `[panelClass]`, is read like `[class]`, an
+object's keys included: the component hands the value on to `[class]` or
+`[ngClass]`.
+
+A binding's expression is read the way JSX reads one: string literals,
+both branches of `? :`, the right side of `&&`, both sides of `||` and
+`??`, arrays and template literals. A class glued to an interpolation,
+`btn-{{ size }}`, is not read, and neither is anything a field, a call,
+a pipe or `+` computes: see [What it cannot see](#what-it-cannot-see).
+`[style.color]` sets `color` whatever its value is, so it is reported
+the way `style="color: ..."` is.
 
 ### Component styles
 
@@ -149,19 +220,68 @@ Global styles that cannot be read, a stylesheet that does not exist or a
 selector that starts with an interpolation, settle every class in the
 project, and the rule says so once on stderr.
 
+### Host bindings
+
+| `host` in `@Component` or `@Directive` | Read as                             |
+| -------------------------------------- | ----------------------------------- |
+| `class: "p-4"`                         | a static class string               |
+| `style: "color: red"`                  | a style, property by property       |
+| `"[class]": "on ? 'p-4' : 'p-2'"`      | the class strings, as in a template |
+| `"[class.p-4]": "on"`                  | the class the key names             |
+| `"[style.color]": "c"`, `"[style]"`    | a style, as in a template           |
+
+A finding is placed where the `.ts` spells the class, inside the string,
+and its suggestion rewrites it there. `class: base` with
+`const base = "p-4"` in the same file is followed, the way Angular's
+compiler evaluates it. `no-unknown-classes` knows the classes the
+component's own styles select, as in its template.
+
+The expressions in the strings are parsed with
+`@angular-eslint/bundled-angular-compiler`, which angular-eslint
+installs. When it cannot be loaded, bindings are not read and the rule
+says so once on stderr; static `class` and `style` are read either way.
+
+### Class helpers
+
+In a component file, classes in `cva(...)` and `cn(...)` are read the
+way they are in a `.tsx` file. A helper with another name is added with
+`mergeFunctions`, for example spartan's `hlm` and `classes`:
+
+```js
+export default defineConfig([
+  { settings: { shadcn: { mergeFunctions: ["hlm", "classes"] } } },
+  // ...
+])
+```
+
+A helper listed there also reads what an arrow function passed to it
+returns, as spartan's `classes(() => "p-4")` merges it, whether the
+arrow returns an expression or has a block with `return`. A function
+passed to anything else is not read: `computed(() => "p-4")` leaves
+`"p-4"` unread. `scanAllStrings` on `no-raw-colors` and
+`no-arbitrary-values` reads every string literal in the file instead,
+classes or not.
+
 ### Component names
 
 A tag with a hyphen is a component, but its selector names it, and
 selectors are not matched yet. `no-restyle` and `require-static-classes`
-do not apply to `<app-card>` or `<p-button>`. The token rules check
-their classes like any element's.
+do not apply to `<app-card>` or `<p-button>`, nor to a host element. The
+token rules check their classes like any element's.
 
 ## What it cannot see
 
-- **Bindings.** `[class]`, `[ngClass]`, `[class.active]`, `[style.color]`,
-  `[ngStyle]`, `[routerLinkActive]`, and an interpolated
-  `class="p-4 {{ tone }}"`, its static part included, are not read yet.
-- **Host classes.** `host: { class: "..." }` and `@HostBinding`.
+- **What a binding computes.** `[class]="classes()"`,
+  `[ngClass]="state"`, `[class]="'p-' + size"` and `{{ x | tone }}`: a
+  template reads the component's fields, and they are not followed into
+  its `.ts`, so the classes they hold are not checked there. A style
+  object computed that way, `[ngStyle]="styles"`, is reported as one that
+  cannot be checked.
+- **`@HostBinding`.** `@HostBinding("class.active")` and
+  `@HostBinding("style.color")` on a field are not read; the `host`
+  property of the decorator is. Color attributes in `host`, such as
+  `"[attr.fill]"`, are not checked either: the host element has no tag
+  to tell an SVG element from a component.
 - **A template in another directory than its component.**
   `templateUrl: "../shared/card.html"` is not traced back, so that
   template's classes are checked without its component's styles.
@@ -171,21 +291,27 @@ their classes like any element's.
   encapsulation they do not reach this template, so a class only they
   declare is reported. Under `ViewEncapsulation.None` or `::ng-deep`
   they do reach it, and the finding is false. Allow such a class by name.
+- **The styles of the components that use a host.** A host element sits
+  in the template of the component that renders it, so that component's
+  styles reach it: `host: { class: "connections" }` styled by
+  `g.connections` in the parent's stylesheet. Which components render it
+  is not known, so such a class is reported, and the message says to
+  allow it by name, as in
+  [External stylesheets](./rules/no-unknown-classes.md#external-stylesheets).
 - **CSS a library ships inside its components.** Angular Material
-  (`mat-*`, `mdc-*`) and PrimeNG (`p-button-text`, `p-datatable-sm`)
-  styles are not in any stylesheet the project names. Allow them by
-  prefix:
+  (`mat-*`, `mdc-*`), the CDK overlay (`cdk-overlay-transparent-backdrop`)
+  and PrimeNG (`p-button-text`, `p-datatable-sm`) styles are not in any
+  stylesheet the project names. Allow them by prefix:
 
   ```js
-  "shadcn/no-unknown-classes": ["error", { allow: ["mat-*", "mdc-*"] }]
+  "shadcn/no-unknown-classes": ["error", { allow: ["mat-*", "mdc-*", "cdk-*"] }]
   ```
 
 - **A Tailwind entry written in Sass.** `@use "tailwindcss"` in a
   `.scss` file is not found as the theme, so the grammar bundled with
   `@shadcn/lint` answers instead of the project's Tailwind, and a
-  plugin's classes are reported. The rule says so once per project, on
-  stderr. Point `tailwind.css` in `components.json` at a CSS file that
-  imports Tailwind and the same plugins.
+  plugin's classes are reported. Name a CSS entry in
+  `settings.shadcn.entryPoint`, as in [Tailwind entry](#tailwind-entry).
 - **Classes no stylesheet declares**, kept as hooks for tests or
   scripts: `class="global-menu"` for `querySelector("button.global-menu")`.
   They generate no CSS, so `no-unknown-classes` reports them, the way it

@@ -12,12 +12,17 @@ import { ownClassesOfCss } from "../src/project/angular-styles"
 import { useParser } from "../src/project/parser"
 import { resetWarnings, setWarningSink } from "../src/project/warn"
 import { angularReader } from "../src/sites/readers/angular"
+import {
+  angularCompiler,
+  setAngularCompilerForTests,
+} from "../src/sites/readers/angular-compiler"
 
 const PROJECT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "fixtures/angular-project"
 )
 const TEMPLATE = path.join(PROJECT, "src/app/card.component.html")
+const FIXTURES_DIR = path.dirname(PROJECT)
 
 // The rules a static class or style attribute reaches.
 const RULES = {
@@ -409,12 +414,638 @@ describe("Angular templates", () => {
     expect(messages).toEqual([])
   })
 
-  it("leaves bindings unread", () => {
-    expect(
-      lint(
-        `<div [class]="'bg-red-500'" [ngClass]="{ 'bg-red-500': on }" [class.bg-red-500]="on" [style.color]="'red'" [ngStyle]="{ color: 'red' }" class="bg-red-500 {{ tone }}"></div>`
+  describe("bindings", () => {
+    const tokens = (code: string, rules: Record<string, unknown> = RULES) =>
+      lint(code, rules).map((m) => [m.ruleId, m.message.split('"')[1]])
+
+    it("reads the classes [class], [ngClass], [class.x] and an interpolation write", () => {
+      expect(
+        tokens(
+          `<div [class]="big ? 'p-[13px]' : 'bg-red-500'" [ngClass]="{ 'm-[3px] p-4': on, 'mx-[5px]': off }" [class.text-[#123456]]="on" [attr.class]="'gap-[9px]'" class="pt-[7px] {{ tone }} pb-[7px] x{{ y }}"></div>`
+        )
+      ).toEqual([
+        ["shadcn/no-arbitrary-values", "p-[13px]"],
+        ["shadcn/no-raw-colors", "bg-red-500"],
+        ["shadcn/no-arbitrary-values", "m-[3px]"],
+        ["shadcn/no-arbitrary-values", "mx-[5px]"],
+        ["shadcn/no-arbitrary-values", "text-[#123456]"],
+        ["shadcn/no-arbitrary-values", "gap-[9px]"],
+        ["shadcn/no-arbitrary-values", "pt-[7px]"],
+        ["shadcn/no-arbitrary-values", "pb-[7px]"],
+      ])
+    })
+
+    it("reads arrays, template literals, || and ?? the way JSX does", () => {
+      expect(
+        tokens(
+          `<div [ngClass]="['p-[1px]', on && 'p-[2px]', on ? null : 'p-[3px]']" [class]="\`p-[4px] \${x} p-[5px]\${y}\`" [routerLinkActive]="tone || 'p-[6px]'" [attr.class]="tone ?? 'p-[7px]'"></div>`
+        )
+      ).toEqual([
+        ["shadcn/no-arbitrary-values", "p-[1px]"],
+        ["shadcn/no-arbitrary-values", "p-[2px]"],
+        ["shadcn/no-arbitrary-values", "p-[3px]"],
+        ["shadcn/no-arbitrary-values", "p-[4px]"],
+        ["shadcn/no-arbitrary-values", "p-[6px]"],
+        ["shadcn/no-arbitrary-values", "p-[7px]"],
+      ])
+    })
+
+    it("reads the classes bound to a component's *Class input", () => {
+      expect(
+        tokens(
+          [
+            `<p-button [styleClass]="'p-[1px]'" [pStyleClass]="'@next'" [enterActiveClass]="on ? 'p-[2px]' : ''"></p-button>`,
+            `<mat-select [panelClass]="['p-[3px]', 'm-2']"></mat-select>`,
+            `<mat-select [panelClass]="{ 'p-[4px]': on, 'm-2': !on }"></mat-select>`,
+            `<p-dialog [contentStyleClass]="cls"></p-dialog>`,
+          ].join("\n")
+        )
+      ).toEqual([
+        ["shadcn/no-arbitrary-values", "p-[1px]"],
+        ["shadcn/no-arbitrary-values", "p-[2px]"],
+        ["shadcn/no-arbitrary-values", "p-[3px]"],
+        ["shadcn/no-arbitrary-values", "p-[4px]"],
+      ])
+    })
+
+    it("judges the style [style], [style.x] and [ngStyle] set", () => {
+      expect(
+        found(
+          `<div [style.color]="tone" [style.width.px]="w" [style.--tone]="'#f00'" [style.--gap]="gap" [ngStyle]="{ margin: m, '--edge': on ? '#fff' : null }" [style]="'padding: 0; --x: 1px'" [attr.style]="'top: 0'"></div>`
+        )
+      ).toEqual([
+        "shadcn/no-inline-styles: Inline style sets color",
+        "shadcn/no-inline-styles: Inline style sets width",
+        "shadcn/no-inline-styles: Custom property --tone hardcodes a color",
+        "shadcn/no-inline-styles: Inline style sets margin",
+        "shadcn/no-inline-styles: Custom property --edge hardcodes a color",
+        "shadcn/no-inline-styles: Inline style sets padding",
+        "shadcn/no-inline-styles: Inline style sets top",
+      ])
+    })
+
+    it("reads a unit in an [ngStyle] key as NgStyle does, and a [style] key as the property it names", () => {
+      const code = `<div [ngStyle]="{ 'width.px': w, 'height.%': on ? h : null, margin: m }" [style.width.px]="w" [style]="{ 'height.px': h }"></div>`
+      const said = (allow: string[]) =>
+        lint(code, { "shadcn/no-inline-styles": ["error", { allow }] }).map(
+          (m) => m.message.split(". ")[0]
+        )
+      expect(said([])).toEqual([
+        "Inline style sets width",
+        "Inline style sets height",
+        "Inline style sets margin",
+        "Inline style sets width",
+        "Inline style sets height.px",
+      ])
+      // `[style]` takes the key whole, a property no browser applies.
+      expect(said(["width", "height", "margin"])).toEqual([
+        "Inline style sets height.px",
+      ])
+    })
+
+    it("says a style object it cannot read cannot be checked, and passes an unreadable class value", () => {
+      expect(
+        found(
+          `<div [ngStyle]="styles" [style]="{ ...base }" [class]="classes()" [ngClass]="{ flex: on, gap: off } | keys" class="{{ tone }}"></div>`
+        )
+      ).toEqual([
+        "shadcn/no-inline-styles: Dynamic style object cannot be checked",
+        "shadcn/no-inline-styles: Dynamic style object cannot be checked",
+      ])
+    })
+
+    it("does not read an input or a binding that is not a class or a style", () => {
+      expect(
+        found(
+          `<div [title]="'bg-red-500'" [ngIf]="'bg-red-500'" [attr.aria-label]="'p-[13px]'" (click)="cls = 'bg-red-500'"></div>`
+        )
+      ).toEqual([])
+    })
+
+    it("places each finding on the string, the key or the class name it reads", () => {
+      const code = `<p [class]="on ? 'p-[13px]' : 'p-2'" [ngClass]="{ 'm-[3px]': on, flex: off }" [class.gap-[9px]]="on" class="flex {{ x }} pt-[7px]" [style.color]="tone"></p>`
+      const messages = lint(code)
+      expect(messages.map((m) => spanned(code, m))).toEqual([
+        `'p-[13px]'`,
+        `'m-[3px]'`,
+        `gap-[9px]`,
+        ` pt-[7px]`,
+        `tone`,
+      ])
+    })
+
+    it("places a binding on a later line, past non-ASCII text", () => {
+      const code = `<p title="Привет 😀"></p>\n<b\n  [class]="'p-[13px]'"></b>`
+      const messages = lint(code)
+      expect(located(messages)).toEqual([
+        ["shadcn/no-arbitrary-values", 3, 12, 3, 22],
+      ])
+      expect(spanned(code, messages[0])).toBe(`'p-[13px]'`)
+    })
+
+    it("rewrites the string or the key, quotes kept, and leaves what it cannot place", () => {
+      for (const [before, after] of [
+        [
+          `<div [class]="'flex p-[13px]'"></div>`,
+          `<div [class]="'flex p-3.25'"></div>`,
+        ],
+        [
+          `<div [ngClass]="{ 'p-[13px]': on }"></div>`,
+          `<div [ngClass]="{ 'p-3.25': on }"></div>`,
+        ],
+        [
+          `<div [ngClass]='{ "p-[13px]": on }'></div>`,
+          `<div [ngClass]='{ "p-3.25": on }'></div>`,
+        ],
+        [
+          `<div [class.p-[13px]]="on"></div>`,
+          `<div [class.p-3.25]="on"></div>`,
+        ],
+      ]) {
+        const [message] = lint(before)
+        const [suggestion] = message.suggestions ?? []
+        const { range, text } = suggestion.fix
+        expect(before.slice(0, range[0]) + text + before.slice(range[1])).toBe(
+          after
+        )
+      }
+      // An escape moves the class between the source and the value.
+      const [escaped] = lint(`<div [class]="'it\\'s p-[13px]'"></div>`)
+      expect(escaped.message).toContain(`"p-[13px]"`)
+      expect(escaped.suggestions).toBeUndefined()
+    })
+
+    it("reads a binding once on an element a structural directive wraps", () => {
+      const code = [
+        `<li *ngIf="item" [class]="'bg-red-500'" [style.color]="c"></li>`,
+        `<ng-template [ngIf]="x"><b [ngClass]="{ 'bg-red-500': on }"></b></ng-template>`,
+        `<i *ngFor="let p of ps" [attr.fill]="'#ff0000'"></i>`,
+      ].join("\n")
+      expect(lint(code).map((m) => [m.ruleId, m.line, m.column])).toEqual([
+        ["shadcn/no-raw-colors", 1, 27],
+        ["shadcn/no-inline-styles", 1, 56],
+        ["shadcn/no-raw-colors", 2, 41],
+        ["shadcn/no-raw-colors", 3, 25],
+      ])
+    })
+
+    it("knows the element a structural directive's binding sits on", () => {
+      const names: string[] = []
+      const probe = {
+        create: () => ({
+          BoundAttribute(node: any) {
+            const element = angularReader.elementOf(node)
+            names.push(
+              `${angularReader.attributeName(node)}:${angularReader.nameOf(element)?.text ?? "-"}`
+            )
+          },
+        }),
+      }
+      new Linter({ cwd: PROJECT }).verify(
+        `<li *ngIf="ok" [class]="a"></li><ng-template [ngIf]="ok" [class]="b"></ng-template>`,
+        [
+          {
+            files: ["**/*.html"],
+            languageOptions: { parser: ngParser as any },
+            plugins: { probe: { rules: { names: probe } } as any },
+            rules: { "probe/names": "error" },
+          },
+        ],
+        { filename: TEMPLATE }
       )
-    ).toEqual([])
+      // The probe is no plugin rule, so it meets the copied input twice.
+      expect(names).toEqual([
+        "ngIf:-",
+        "class:li",
+        "class:li",
+        "ngIf:-",
+        "class:-",
+      ])
+    })
+
+    it("knows a class the component's stylesheet declares", () => {
+      expect(
+        tokens(
+          `<div [ngClass]="{ 'card-header': on, 'card-heder': off }"></div>`,
+          {
+            "shadcn/no-unknown-classes": "error",
+          }
+        )
+      ).toEqual([["shadcn/no-unknown-classes", "card-heder"]])
+    })
+
+    // The parser decodes entities before it parses a binding, so its
+    // offsets count the decoded text, not the file.
+    const applied = (code: string, message: Linter.LintMessage) => {
+      const fix = message.suggestions?.[0]?.fix
+      return fix
+        ? code.slice(0, fix.range[0]) + fix.text + code.slice(fix.range[1])
+        : null
+    }
+
+    const ARBITRARY = { "shadcn/no-arbitrary-values": "error" }
+
+    it("places a binding past entities where the file spells it", () => {
+      for (const [code, spans, after] of [
+        [
+          `<div [class]="c[&quot;&quot;] ? x['p-[13px]']  : 'p-[13px]'"></div>`,
+          [`'p-[13px]'`],
+          `<div [class]="c[&quot;&quot;] ? x['p-[13px]']  : 'p-3.25'"></div>`,
+        ],
+        [
+          `<div [class]="n &gt; 3 ? 'p-[13px]' : 'm-[3px]'"></div>`,
+          [`'p-[13px]'`, `'m-[3px]'`],
+          `<div [class]="n &gt; 3 ? 'p-3.25' : 'm-[3px]'"></div>`,
+        ],
+        [
+          `<div [ngClass]="{ 'p-[13px]': n &gt; 3, 'm-[3px]': a &amp;&amp; b }"></div>`,
+          [`'p-[13px]'`, `'m-[3px]'`],
+          `<div [ngClass]="{ 'p-3.25': n &gt; 3, 'm-[3px]': a &amp;&amp; b }"></div>`,
+        ],
+        [
+          `<div\r\n  [class]="c\r\n    ? x['p-[13px]']\r\n    : 'p-[13px]'"></div>`,
+          [`'p-[13px]'`],
+          `<div\r\n  [class]="c\r\n    ? x['p-[13px]']\r\n    : 'p-3.25'"></div>`,
+        ],
+      ] as const) {
+        const messages = lint(code)
+        expect(messages.map((m) => spanned(code, m))).toEqual(spans)
+        expect(applied(code, messages[0])).toBe(after)
+      }
+    })
+
+    it("places the text around an interpolation past entities, and an expression on its braces without a suggestion", () => {
+      const code = `<div class="a&amp;b {{ x }} p-[13px] {{ on ? 'm-[3px]' : '' }} f&lt;x"></div>`
+      const messages = lint(code, ARBITRARY)
+      expect(messages.map((m) => spanned(code, m))).toEqual([
+        ` p-[13px] `,
+        `{{ on ? 'm-[3px]' : '' }}`,
+      ])
+      expect(messages.map((m) => m.suggestions)).toEqual([undefined, undefined])
+      const crlf = `<div class="a&amp;b\r\n  {{ x }} p-[13px]\r\n  f&lt;x"></div>`
+      expect(lint(crlf, ARBITRARY).map((m) => spanned(crlf, m))).toEqual([
+        ` p-[13px]\r\n  f&lt;x`,
+      ])
+    })
+
+    it("finds the braces the parser does, past a quote an entity spells", () => {
+      // Decoded, the quotes hold the `}}`; in the file they do not.
+      const code = `<div class="x {{ on ? &apos;}}&apos; : 'p-[13px]' }}"></div>`
+      const messages = lint(code, ARBITRARY)
+      expect(messages.map((m) => spanned(code, m))).toEqual([
+        `{{ on ? &apos;}}&apos; : 'p-[13px]' }}`,
+      ])
+      expect(messages[0].suggestions).toBeUndefined()
+    })
+
+    it("reports a binding in an inline template where it is written, without a suggestion", () => {
+      const code = [
+        `import { Component } from "@angular/core"`,
+        "@Component({",
+        `  selector: "app-card",`,
+        "  template: `<div [ngClass]=\"{ 'p-[13px]': on, 'btn-${size}': on }\" [class]=\"'m-[3px] p-${pad}'\"></div>`,",
+        "})",
+        "export class CardComponent {}",
+      ].join("\n")
+      const messages = lintInline(
+        code,
+        path.join(PROJECT, "src/app/card.component.ts")
+      )
+      expect(messages.map((m) => spanned(code, m))).toEqual([
+        `'p-[13px]'`,
+        `'m-[3px] p-\${pad}'`,
+      ])
+      expect(messages.map((m) => m.suggestions)).toEqual([undefined, undefined])
+    })
+  })
+
+  describe("host bindings", () => {
+    const COMPONENT = path.join(PROJECT, "src/app/host.component.ts")
+
+    // A component file linted on its own, with the plugin on .ts files.
+    const lintTs = (
+      code: string,
+      filename = COMPONENT,
+      rules: Record<string, unknown> = RULES
+    ) =>
+      new Linter({ cwd: PROJECT }).verify(
+        code,
+        [
+          {
+            files: ["**/*.ts"],
+            languageOptions: { parser: tsParser as any },
+            plugins: { shadcn: plugin as any },
+            rules: rules as any,
+          },
+        ],
+        { filename }
+      )
+
+    const component = (host: string[], decorator = "Component") =>
+      [
+        `import { ${decorator} } from "@angular/core"`,
+        `@${decorator}({`,
+        `  selector: "app-host",`,
+        "  host: {",
+        ...host.map((line) => `    ${line},`),
+        "  },",
+        "})",
+        "export class HostComponent {}",
+      ].join("\n")
+
+    it("reads static class and style, and class and style bindings", () => {
+      const code = component([
+        `class: "flex p-[13px] bg-red-500"`,
+        `style: "color: red; --tone: #fff"`,
+        `"[class]": "big ? 'm-[3px]' : { 'mx-[5px]': on }"`,
+        `"[class.gap-[9px]]": "on"`,
+        `"[style.width.px]": "w"`,
+        `"[style]": "{ margin: m, '--edge': '#000' }"`,
+        `"[attr.class]": \`on && 'pt-[7px]'\``,
+      ])
+      expect(
+        lintTs(code).map((m) => `${m.ruleId}: ${spanned(code, m)}`)
+      ).toEqual([
+        `shadcn/no-raw-colors: "flex p-[13px] bg-red-500"`,
+        `shadcn/no-arbitrary-values: "flex p-[13px] bg-red-500"`,
+        `shadcn/no-inline-styles: "color: red; --tone: #fff"`,
+        `shadcn/no-inline-styles: "color: red; --tone: #fff"`,
+        `shadcn/no-arbitrary-values: 'm-[3px]'`,
+        `shadcn/no-arbitrary-values: 'mx-[5px]'`,
+        `shadcn/no-arbitrary-values: gap-[9px]`,
+        `shadcn/no-inline-styles: w`,
+        `shadcn/no-inline-styles: m`,
+        `shadcn/no-inline-styles: '#000'`,
+        `shadcn/no-arbitrary-values: 'pt-[7px]'`,
+      ])
+    })
+
+    it("rewrites the class where the .ts spells it", () => {
+      for (const [before, after] of [
+        [`class: "flex p-[13px]"`, `class: "flex p-3.25"`],
+        [
+          `"[class]": "on ? 'p-[13px]' : ''"`,
+          `"[class]": "on ? 'p-3.25' : ''"`,
+        ],
+        [`"[class.p-[13px]]": "on"`, `"[class.p-3.25]": "on"`],
+        [
+          `"[class]": "on ? \\"p-[13px]\\" : ''"`,
+          `"[class]": "on ? \\"p-[13px]\\" : ''"`,
+        ],
+      ]) {
+        const code = component([before])
+        const [message] = lintTs(code)
+        expect(message.message).toContain(`"p-[13px]"`)
+        const fix = message.suggestions?.[0]?.fix
+        const fixed = fix
+          ? code.slice(0, fix.range[0]) + fix.text + code.slice(fix.range[1])
+          : code
+        expect(fixed).toBe(component([after]))
+      }
+    })
+
+    it("places a class past escapes and line continuations in the string", () => {
+      const code = component([
+        `"[class]": "on \\\n ? '\\u0070x-[13px]' : \\"flex\\" || 'm-[3px]'"`,
+      ])
+      const messages = lintTs(code)
+      expect(messages.map((m) => spanned(code, m))).toEqual([
+        `'\\u0070x-[13px]'`,
+        `'m-[3px]'`,
+      ])
+      expect(messages[0].message).toContain(`"px-[13px]"`)
+    })
+
+    it("places a class in a template literal written over CRLF lines", () => {
+      // The literal's text keeps each CRLF; the string it spells has LF.
+      const code = component([
+        "\"[class]\": `on\n      ? x['p-[13px]']\n      : 'p-[13px]'`",
+      ]).replace(/\n/g, "\r\n")
+      const messages = lintTs(code)
+      expect(messages.map((m) => spanned(code, m))).toEqual([`'p-[13px]'`])
+      const fix = messages[0].suggestions![0].fix
+      expect(
+        code.slice(0, fix.range[0]) + fix.text + code.slice(fix.range[1])
+      ).toBe(code.replace(`: 'p-[13px]'`, `: 'p-3.25'`))
+    })
+
+    it("reports a host binding once when every string is scanned", () => {
+      const code = component([
+        `class: "bg-red-500 p-[13px]"`,
+        `"[class]": "on ? 'bg-red-500 p-[14px]' : ''"`,
+        `"[class.bg-blue-500]": "on"`,
+      ])
+      const messages = lintTs(code, COMPONENT, {
+        "shadcn/no-raw-colors": ["error", { scanAllStrings: true }],
+        "shadcn/no-arbitrary-values": ["error", { scanAllStrings: true }],
+      })
+      expect(
+        messages.map((m) => `${m.message.split('"')[1]} ${spanned(code, m)}`)
+      ).toEqual([
+        `bg-red-500 "bg-red-500 p-[13px]"`,
+        `p-[13px] "bg-red-500 p-[13px]"`,
+        `bg-red-500 'bg-red-500 p-[14px]'`,
+        `p-[14px] 'bg-red-500 p-[14px]'`,
+        `bg-blue-500 bg-blue-500`,
+      ])
+    })
+
+    it("reads what spartan's classes() helper returns, named in mergeFunctions", () => {
+      const code = [
+        `import { Directive } from "@angular/core"`,
+        `import { classes, hlm } from "@spartan-ng/helm/utils"`,
+        `@Directive({ selector: "[hlmBadge]" })`,
+        "export class HlmBadge {",
+        `  constructor() { classes(() => "inline-flex p-[13px]") }`,
+        `  readonly x = classes(() => { return hlm("m-[3px]", this.y) })`,
+        "}",
+      ].join("\n")
+      const messages = new Linter({ cwd: PROJECT }).verify(
+        code,
+        [
+          {
+            files: ["**/*.ts"],
+            languageOptions: { parser: tsParser as any },
+            plugins: { shadcn: plugin as any },
+            settings: { shadcn: { mergeFunctions: ["hlm", "classes"] } },
+            rules: { "shadcn/no-arbitrary-values": "error" },
+          },
+        ],
+        { filename: COMPONENT }
+      )
+      expect(messages.map((m) => spanned(code, m))).toEqual([
+        `"inline-flex p-[13px]"`,
+        `"m-[3px]"`,
+      ])
+    })
+
+    describe("with another compiler", () => {
+      let warnings: string[] = []
+      beforeEach(() => {
+        warnings = []
+        resetWarnings()
+        setWarningSink((message) => warnings.push(message))
+      })
+      afterEach(() => {
+        setAngularCompilerForTests(undefined)
+        setWarningSink((message) => console.warn(message))
+      })
+
+      it("reads a key's class and style without the compiler, and says once that values are not checked", () => {
+        setAngularCompilerForTests(null)
+        const code = component([
+          `"[class.p-[13px]]": "on"`,
+          `"[style.color]": "tone"`,
+          `"[class]": "'m-[3px]'"`,
+          `"[style]": "{ margin: m }"`,
+        ])
+        expect(
+          lintTs(code).map((m) => `${m.ruleId}: ${spanned(code, m)}`)
+        ).toEqual([
+          "shadcn/no-arbitrary-values: p-[13px]",
+          `shadcn/no-inline-styles: "tone"`,
+        ])
+        expect(warnings).toEqual([
+          "[@shadcn/lint] Host binding values such as `[class]` and `[style.color]` in @Component and @Directive are read with @angular-eslint/bundled-angular-compiler, which angular-eslint installs. It could not be loaded, so they are not checked; the class or style property a key names, as in `[class.active]`, still is. Install angular-eslint.",
+        ])
+      })
+
+      it("reports on the whole object, without a suggestion, when the compiler does not place keys", () => {
+        // Compilers before 21 give a LiteralMap's keys no span.
+        const current = angularCompiler(COMPONENT)
+        const unplaced = (node: any): void => {
+          if (!node || typeof node !== "object") return
+          if (Array.isArray(node.keys)) {
+            node.keys = node.keys.map(
+              ({ kind: _kind, span: _span, sourceSpan: _at, ...key }: any) =>
+                key
+            )
+          }
+          for (const value of Object.values(node)) unplaced(value)
+        }
+        setAngularCompilerForTests({
+          ...current,
+          makeBindingParser: () => {
+            const parser = current.makeBindingParser()
+            return {
+              createBoundHostProperties(properties: any, span: any) {
+                const out = parser.createBoundHostProperties(properties, span)
+                for (const property of out ?? []) unplaced(property.expression)
+                return out
+              },
+            }
+          },
+        })
+        const code = component([`"[class]": "{ 'p-[13px]': on, flex: off }"`])
+        const messages = lintTs(code)
+        expect(messages.map((m) => spanned(code, m))).toEqual([
+          `{ 'p-[13px]': on, flex: off }`,
+        ])
+        expect(messages[0].suggestions).toBeUndefined()
+      })
+
+      it("takes the compiler of the linted file's project", () => {
+        const own = path.join(FIXTURES_DIR, "angular-own-compiler/src/x.ts")
+        expect(angularCompiler(own)?.own).toBe(true)
+        expect(angularCompiler(COMPONENT)?.own).toBeUndefined()
+      })
+    })
+
+    it("follows a constant the compiler evaluates, and reads a directive's host", () => {
+      const code = [
+        `import { Directive } from "@angular/core"`,
+        `const base = "p-[2px]"`,
+        `@Directive({ selector: "[appX]", host: { class: base } })`,
+        "export class X {}",
+      ].join("\n")
+      expect(lintTs(code).map((m) => spanned(code, m))).toEqual([`"p-[2px]"`])
+    })
+
+    it("reads only the host of a component or a directive", () => {
+      const code = [
+        `import { Component, Injectable } from "@angular/core"`,
+        `@Injectable({ host: { class: "p-[1px]" } } as any)`,
+        "export class S {}",
+        `const config = { host: { class: "p-[2px]" } }`,
+        `@Component({ selector: "x", host: { role: "p-[3px]", "(click)": "c = 'p-[4px]'", "[title]": "'p-[5px]'", "[ngClass]": "'p-[6px]'", ["class"]: "p-[7px]" } })`,
+        "export class X {}",
+      ].join("\n")
+      expect(lintTs(code)).toEqual([])
+    })
+
+    it("says a host style object it cannot read cannot be checked", () => {
+      expect(
+        lintTs(
+          component([`"[style]": "styles()"`, `"[class]": "classes()"`])
+        ).map((m) => m.message.split(".")[0])
+      ).toEqual(["Dynamic style object cannot be checked"])
+    })
+
+    it("knows the classes the component's own styles select", () => {
+      const file = path.join(PROJECT, "src/app/badge.component.ts")
+      expect(
+        lintTs(fs.readFileSync(file, "utf8"), file, {
+          "shadcn/no-unknown-classes": "error",
+        }).map((m) => m.message.split('"')[1])
+      ).toEqual(["badge-actve"])
+    })
+
+    it("says a host class a parent's stylesheet styles goes in allow", () => {
+      const code = component([`class: "connections flxe"`])
+      expect(
+        lintTs(code, COMPONENT, { "shadcn/no-unknown-classes": "error" }).map(
+          (m) => m.message
+        )
+      ).toEqual([
+        `"connections" is not a class this project's Tailwind knows, so no CSS is generated for it. Fix the spelling, or declare it with @utility in src/styles.css. If the stylesheet of a component that renders this host styles it, add it to allow.`,
+        `"flxe" is not a class this project's Tailwind knows, so no CSS is generated for it. Did you mean "flex"? If the stylesheet of a component that renders this host styles it, add it to allow.`,
+      ])
+      // A template's class keeps the message every other site has.
+      const [template] = lint(`<div class="connections"></div>`, {
+        "shadcn/no-unknown-classes": "error",
+      })
+      expect(template.message).toBe(
+        `"connections" is not a class this project's Tailwind knows, so no CSS is generated for it. Fix the spelling, or declare it with @utility in src/styles.css.`
+      )
+    })
+
+    it("reports a host binding once beside the inline template the processor hands over", () => {
+      const code = [
+        `import { Component } from "@angular/core"`,
+        "@Component({",
+        `  selector: "app-card",`,
+        '  template: `<div class="p-[1px]"></div>`,',
+        `  host: { class: "p-[2px]" },`,
+        "})",
+        "export class CardComponent {}",
+      ].join("\n")
+      const messages = new Linter({ cwd: PROJECT }).verify(
+        code,
+        [
+          {
+            files: ["**/*.ts"],
+            languageOptions: { parser: tsParser as any },
+            processor: templatePlugin.processors["extract-inline-html"] as any,
+            plugins: { shadcn: plugin as any },
+            rules: RULES as any,
+          },
+          {
+            files: ["**/*.html"],
+            languageOptions: { parser: ngParser as any },
+            plugins: { shadcn: plugin as any },
+            rules: RULES as any,
+          },
+        ],
+        { filename: COMPONENT, filterCodeBlock: () => true }
+      )
+      // The processor puts the .ts's own findings first.
+      expect(messages.map((m) => spanned(code, m))).toEqual([
+        `"p-[2px]"`,
+        `"p-[1px]"`,
+      ])
+      // The host is in the .ts itself, so its suggestion lands there.
+      expect(messages.map((m) => m.suggestions?.length ?? 0)).toEqual([1, 0])
+    })
   })
 
   it("finds the parent element past ng-container, templates and blocks", () => {
@@ -670,7 +1301,7 @@ describe("Angular templates", () => {
         path.join(FIXTURES, "angular-sass-entry")
       )
       expect(warnings).toEqual([
-        `[@shadcn/lint] src/styles.scss imports Tailwind, but a Sass file is not read as the Tailwind entry and no CSS file under ${where} imports it, so no-unknown-classes reads classes with the grammar bundled with @shadcn/lint, and the project's theme is not read. Set tailwind.css in components.json to a CSS file that imports Tailwind and the same plugins.`,
+        `[@shadcn/lint] src/styles.scss imports Tailwind, but a Sass file is not read as the Tailwind entry and no CSS file under ${where} imports it, so no-unknown-classes reads classes with the grammar bundled with @shadcn/lint, and the project's theme is not read. Tailwind v4 is not meant to be used with Sass: write a CSS file that imports Tailwind, the theme and the same plugins, and set settings.shadcn.entryPoint to it.`,
       ])
     })
 
@@ -681,8 +1312,90 @@ describe("Angular templates", () => {
         path.join(FIXTURES, "angular-no-entry")
       )
       expect(warnings).toEqual([
-        `[@shadcn/lint] No stylesheet importing Tailwind was found under ${where}, so no-unknown-classes reads classes with the grammar bundled with @shadcn/lint, and the project's theme is not read. Set tailwind.css in components.json to the stylesheet that imports Tailwind.`,
+        `[@shadcn/lint] No stylesheet importing Tailwind was found under ${where}, so no-unknown-classes reads classes with the grammar bundled with @shadcn/lint, and the project's theme is not read. Set settings.shadcn.entryPoint to the stylesheet that imports Tailwind.`,
       ])
+    })
+
+    // A project whose Tailwind entry sits outside it, where nothing finds
+    // it but the setting.
+    const unknownWith = (entryPoint: unknown, code: string) => {
+      const dir = path.join(FIXTURES, "angular-entry-point")
+      return new Linter({ cwd: dir })
+        .verify(
+          code,
+          [
+            {
+              files: ["**/*.html"],
+              languageOptions: { parser: ngParser as any },
+              plugins: { shadcn: plugin as any },
+              settings: { shadcn: { entryPoint } },
+              rules: { "shadcn/no-unknown-classes": "error" },
+            },
+          ],
+          { filename: path.join(dir, "app/src/app/page.html") }
+        )
+        .map((m) => m.message.split('"')[1])
+    }
+
+    it("reads the classes Tailwind knows from settings.shadcn.entryPoint, without components.json", () => {
+      expect(
+        unknownWith(
+          "styles/tailwind.css",
+          `<div class="flex brand-box brand-bx"></div>`
+        )
+      ).toEqual(["brand-bx"])
+      expect(warnings).toEqual([])
+    })
+
+    it("says once that settings.shadcn.entryPoint names no file, and falls back", () => {
+      for (const code of [`<div class="brand-box"></div>`, `<div></div>`]) {
+        unknownWith("styles/missing.css", code)
+      }
+      unknownWith(3, `<div></div>`)
+      expect(warnings).toEqual([
+        "[@shadcn/lint] settings.shadcn.entryPoint is styles/missing.css, which does not exist. No stylesheet importing Tailwind was found under the project, so no-unknown-classes reads classes with the grammar bundled with @shadcn/lint until the path is fixed.",
+        "[@shadcn/lint] settings.shadcn.entryPoint must be a string; it is ignored.",
+        // Ignored, the setting leaves the project with its Sass entry.
+        expect.stringContaining("src/styles.scss imports Tailwind"),
+      ])
+    })
+
+    // A script file in a project of any framework.
+    const scriptIn = (workspace: string, file: string) => {
+      const dir = path.join(FIXTURES, workspace)
+      return new Linter({ cwd: dir }).verify(
+        `export const A = () => <div className="flex p-4" />`,
+        [
+          {
+            files: ["**/*.tsx"],
+            languageOptions: {
+              parser: tsParser as any,
+              parserOptions: { ecmaFeatures: { jsx: true } },
+            },
+            plugins: { shadcn: plugin as any },
+            rules: { "shadcn/no-unknown-classes": "error" },
+          },
+        ],
+        { filename: path.join(dir, file) }
+      )
+    }
+
+    it("warns once per workspace, in a project of any framework", () => {
+      scriptIn("entryless-workspace", "packages/a/src/a.tsx")
+      scriptIn("entryless-workspace", "packages/b/src/b.tsx")
+      const where = path.relative(
+        process.cwd(),
+        path.join(FIXTURES, "entryless-workspace/packages/a")
+      )
+      expect(warnings).toEqual([
+        `[@shadcn/lint] No stylesheet importing Tailwind was found under ${where}, so no-unknown-classes reads classes with the grammar bundled with @shadcn/lint, and the project's theme is not read. Set settings.shadcn.entryPoint to the stylesheet that imports Tailwind.`,
+      ])
+    })
+
+    it("does not warn in a Tailwind v3 project, which has no CSS entry to find", () => {
+      scriptIn("tailwind3-css", "src/app.tsx")
+      scriptIn("tailwind3-installed", "src/app.tsx")
+      expect(warnings).toEqual([])
     })
   })
 

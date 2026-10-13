@@ -56,10 +56,14 @@
     "cn": "0.4.0"
   },
   "peerDependencies": {
+    "@angular-eslint/bundled-angular-compiler": ">=19.0.0",
     "@typescript-eslint/parser": ">=8.40.0",
     "eslint": ">=9.30.0"
   },
   "peerDependenciesMeta": {
+    "@angular-eslint/bundled-angular-compiler": {
+      "optional": true
+    },
     "@typescript-eslint/parser": {
       "optional": true
     },
@@ -68,6 +72,7 @@
     }
   },
   "devDependencies": {
+    "@angular-eslint/bundled-angular-compiler": "^22.6.0",
     "@angular-eslint/eslint-plugin-template": "^22.6.0",
     "@angular-eslint/template-parser": "^22.6.0",
     "@tailwindcss/node": "^4.3.3",

@@ -559,3 +559,13 @@ export function angularOwnClassesOf(
   })
   return toOwnClasses(declared)
 }
+
+// The classes the styles of the components a .ts file declares select,
+// for the host bindings written beside them.
+export function angularFileClassesOf(file: string): OwnClasses {
+  const declared = memoize(`angular:file:${file}`, () => {
+    const metas = componentsIn(file)
+    return metas.length ? declaredBy(file, metas) : EMPTY
+  })
+  return toOwnClasses(declared)
+}

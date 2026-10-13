@@ -4,7 +4,8 @@
 // one.
 
 import { replaceClass } from "../grammar/classes"
-import { isMarkupLiteral } from "../sites/readers"
+import { isMarkupLiteral, readerFor } from "../sites/readers"
+import { angularReader } from "../sites/readers/angular"
 
 // Markup text is its own source: nothing is escaped, and the quotes, if
 // the node has them at all, stay where they are.
@@ -49,11 +50,11 @@ export function replaceInLiteral(
 // angular-eslint's processor lints an inline template as a file of its
 // own and moves fixes back into the .ts, but not suggestions: applied
 // there, one would rewrite the top of the file. The finding stays.
-function isInlineAngularTemplate(node: any, context: any) {
+function isInlineAngularTemplate(context: any) {
   return (
-    node?.type === "AngularLiteral" &&
     context.physicalFilename != null &&
-    context.physicalFilename !== context.filename
+    context.physicalFilename !== context.filename &&
+    readerFor(context) === angularReader
   )
 }
 
@@ -65,7 +66,7 @@ export function classSuggestion(
   messageId: string,
   data: Record<string, string>
 ) {
-  if (isInlineAngularTemplate(node, context)) return null
+  if (isInlineAngularTemplate(context)) return null
   const text = replaceInLiteral(node, context, token, replacement)
   if (text === null) return null
   return {

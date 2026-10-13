@@ -35,6 +35,9 @@ export type TemplateReader = {
   attributeName: (node: any) => string
   // Null when the attribute has no value.
   attributeValue: (node: any) => any
+  // The script strings an attribute is read from when they are not its
+  // value. A scan of every string leaves them to the attribute.
+  sourceStrings?: (node: any) => any[]
   spreadArgument: (node: any) => any
   // The element an attribute or a spread sits on.
   elementOf: (node: any) => any
@@ -50,11 +53,16 @@ export type TemplateReader = {
     string,
     (node: any) => { property: string; value: any } | null
   >
-  // Markup whose `class` takes an object with classes as keys.
-  classObjects?: boolean
-  // Markup where `style="color: red"` is how a style is written. In JSX
-  // a string is not a style, and it stays unread.
-  staticStyles?: boolean
+  // Markup whose `class` takes an object with classes as keys, or the
+  // class attributes that do, by node and name.
+  classObjects?: boolean | ((attribute: any, name: string) => boolean)
+  // Markup where `style="color: red"` is how a style is written, or the
+  // values where it is. In JSX a string is not a style, and it stays
+  // unread.
+  staticStyles?: boolean | ((value: any) => boolean)
+  // Node types the traversal can reach more than once. Each rule sees
+  // such a node the first time only.
+  revisited?: string[]
   // A template identifier's variable when the parser's scopes stop at
   // the script.
   variableOf?: (node: any, context: any) => any

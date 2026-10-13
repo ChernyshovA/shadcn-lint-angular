@@ -2,8 +2,17 @@
 // template AST, each node typed by its class: Element, TextAttribute,
 // BoundAttribute. A static `class="p-4"` is a TextAttribute holding the
 // decoded text and the spans it was read from. A binding, `[class]` or
-// `class="{{ x }}"`, is a BoundAttribute, and this reader does not read it.
+// `class="{{ x }}"`, is a BoundAttribute whose value is an expression,
+// read through `estreeOf`.
 
+import { angularCompiler } from "./angular-compiler"
+import {
+  classNameNode,
+  estreeOf,
+  lineCounter,
+  styleObjectNode,
+  type ExpressionSource,
+} from "./angular-expressions"
 import type { TemplateReader } from "./types"
 
 const literals = new WeakMap<object, any>()
@@ -80,6 +89,216 @@ function literalOf(attribute: any) {
   return literal
 }
 
+const sources = new WeakMap<object, ExpressionSource>()
+
+// Template spans are offsets into the file the parser read.
+function fileSourceOf(file: any): ExpressionSource {
+  let source = sources.get(file)
+  if (!source) {
+    source = {
+      text: file.content,
+      base: 0,
+      at: (offset) => offset,
+      loc: lineCounter(file.content),
+    }
+    sources.set(file, source)
+  }
+  return source
+}
+
+const entities = new Map<string, string | null>()
+
+// What the parser decodes a named entity to, asked of the compiler.
+function namedEntity(entity: string, file: string) {
+  if (entities.has(entity)) return entities.get(entity)!
+  let value: string | null = null
+  try {
+    const angular = angularCompiler(file)
+    const { rootNodes, errors } = new angular.HtmlParser().parse(
+      `<a b="${entity}"></a>`,
+      "",
+      {}
+    )
+    if (!errors.length) value = rootNodes[0]?.attrs?.[0]?.value ?? null
+  } catch {
+    // No compiler: the value is placed as a whole.
+  }
+  entities.set(entity, value)
+  return value
+}
+
+// An attribute value as the parser decodes it, and for each character
+// the offset in `raw` it was read from, with one more for the end. Line
+// endings stay as written. Null for an entity this cannot decode.
+function decode(raw: string, file: string) {
+  let text = ""
+  const at: number[] = []
+  let i = 0
+  while (i < raw.length) {
+    let value = raw[i]
+    let length = 1
+    if (value === "&") {
+      const entity =
+        /^&(?:#[xX]([0-9a-fA-F]+)|#(\d+)|[A-Za-z][A-Za-z0-9]*);/.exec(
+          raw.slice(i, i + 64)
+        )
+      if (entity) {
+        const [written, hex, decimal] = entity
+        let decoded: string | null = null
+        try {
+          decoded =
+            hex || decimal
+              ? String.fromCodePoint(parseInt(hex ?? decimal, hex ? 16 : 10))
+              : namedEntity(written, file)
+        } catch {
+          // Past the last code point.
+        }
+        if (decoded === null) return null
+        value = decoded
+        length = written.length
+      }
+    }
+    text += value
+    for (let k = 0; k < value.length; k++) at.push(i)
+    i += length
+  }
+  at.push(raw.length)
+  return { text, at }
+}
+
+// The parser reads a binding from its value with entities decoded, and
+// its spans count that text from where the value starts. Where the file spells the value
+// otherwise, its offsets are mapped back through the decoding; a value
+// this cannot decode as the parser did is placed as a whole.
+function sourceOf(attribute: any): ExpressionSource | null {
+  const file = attribute?.sourceSpan?.start?.file
+  if (typeof file?.content !== "string") return null
+  const source = fileSourceOf(file)
+  const span = attribute.valueSpan
+  const decoded = attribute.value?.source
+  if (!span || typeof decoded !== "string") return source
+  const from: number = (span.fullStart ?? span.start).offset
+  const to: number = span.end.offset
+  const raw: string = file.content.slice(from, to)
+  if (raw === decoded) return source
+  const decoding = decode(raw, file.url ?? "")
+  if (
+    decoding?.text !== decoded ||
+    attribute.value.sourceSpan?.start !== from
+  ) {
+    return { ...source, whole: [from, to] }
+  }
+  const { at } = decoding
+  return {
+    ...source,
+    at: (offset) =>
+      from + at[Math.max(0, Math.min(offset - from, at.length - 1))],
+    decoded: { text: decoded, from },
+  }
+}
+
+// The binding as written between the brackets: `class.active`,
+// `style.width.px`, `attr.fill`. The parser keeps the compiler's binding
+// kind out of reach, since `type` is the node's class name.
+function keyOf(attribute: any): string {
+  const key = attribute?.keySpan
+  const text: string = key?.start?.file?.content ?? ""
+  return key && text
+    ? text.slice(key.start.offset, key.end.offset).replace(/^bind-/, "")
+    : (attribute?.name ?? "")
+}
+
+// What a binding sets, under the attribute name a static one would have:
+// `[ngClass]` and `[class.x]` set classes, `[ngStyle]` and `[style.x]`
+// a style, `[attr.fill]` the attribute.
+function bindingName(attribute: any) {
+  const key = keyOf(attribute)
+  if (key.startsWith("class.") || key === "ngClass") return "class"
+  if (key.startsWith("style.") || key === "ngStyle") return "style"
+  if (key.startsWith("attr.")) return key.slice(5)
+  return typeof attribute?.name === "string" ? attribute.name : ""
+}
+
+const values = new WeakMap<object, any>()
+
+// NgStyle reads `'width.px': w` as the width in pixels. `[style]` takes a
+// key whole, as the property it names.
+function withoutUnits(node: any): any {
+  if (node?.type === "ConditionalExpression") {
+    withoutUnits(node.consequent)
+    withoutUnits(node.alternate)
+  } else if (node?.type === "LogicalExpression") {
+    withoutUnits(node.left)
+    withoutUnits(node.right)
+  } else if (node?.type === "ObjectExpression") {
+    for (const { key } of node.properties) {
+      if (key?.type === "Literal" && typeof key.value === "string") {
+        key.value = key.value.split(".")[0]
+      }
+    }
+  }
+  return node
+}
+
+// `[class.active]="on"` adds the class its key names; `[style.color]="c"`
+// is the style object `{ color: c }`. Everything else is its expression.
+function bindingValue(attribute: any) {
+  if (values.has(attribute)) return values.get(attribute)
+  const source = sourceOf(attribute)
+  let value: any = null
+  if (source && attribute.value) {
+    const key = keyOf(attribute)
+    const start = attribute.keySpan?.start?.offset
+    if (key.startsWith("class.") && typeof start === "number") {
+      value = classNameNode(
+        key.slice("class.".length),
+        start + "class.".length,
+        start + key.length,
+        source,
+        attribute
+      )
+    } else if (key.startsWith("style.") && typeof start === "number") {
+      const property = key.slice("style.".length).split(".")[0]
+      const from = start + "style.".length
+      value = styleObjectNode(
+        property,
+        from,
+        from + property.length,
+        source,
+        attribute,
+        (owner) =>
+          estreeOf(attribute.value, source, owner, withoutInterpolations)
+      )
+    } else {
+      value = estreeOf(
+        attribute.value,
+        source,
+        attribute,
+        withoutInterpolations
+      )
+      if (key === "ngStyle") withoutUnits(value)
+    }
+  }
+  values.set(attribute, value)
+  return value
+}
+
+// A structural directive's template copies the element's bindings into
+// its own inputs: the same node, reached twice, with the template as its
+// parent.
+function elementOfBinding(attribute: any) {
+  const parent = attribute?.parent
+  if (parent?.type === "Element") return parent
+  if (parent?.type !== "Template") return null
+  if (parent.templateAttrs?.includes(attribute)) return null
+  return (
+    parent.children?.find(
+      (child: any) =>
+        child?.type === "Element" && child.inputs?.includes(attribute)
+    ) ?? null
+  )
+}
+
 // The compiler names a <path> inside an <svg> `:svg:path`.
 function tagOf(element: any) {
   const name = element?.name
@@ -87,20 +306,31 @@ function tagOf(element: any) {
 }
 
 export const angularReader: TemplateReader = {
-  attributes: ["TextAttribute"],
+  attributes: ["TextAttribute", "BoundAttribute"],
+  revisited: ["BoundAttribute"],
   // The router adds these classes while the link is active.
   classAttributes: ["routerLinkActive"],
   // PrimeNG's StyleClass takes the element it toggles classes on:
   // `pStyleClass="@next"`. Its enterActiveClass and the rest are classes.
   notClassAttributes: ["pStyleClass"],
   spreads: [],
+  // `[class]` and `[ngClass]` take an object with classes as keys, and
+  // so does an input such as Material's `[panelClass]`, which hands it on
+  // to them.
+  classObjects: (node, name) =>
+    name === "class" || node?.type === "BoundAttribute",
   staticStyles: true,
-  attributeName: (node) => (typeof node?.name === "string" ? node.name : ""),
-  attributeValue: literalOf,
+  attributeName(node) {
+    if (node?.type === "BoundAttribute") return bindingName(node)
+    return typeof node?.name === "string" ? node.name : ""
+  },
+  attributeValue: (node) =>
+    node?.type === "BoundAttribute" ? bindingValue(node) : literalOf(node),
   spreadArgument: () => null,
   // A structural directive's own attributes (`*ngFor="let x of xs"`) sit
   // on the template it creates, which is no element.
   elementOf(node) {
+    if (node?.type === "BoundAttribute") return elementOfBinding(node)
     const element = node?.parent
     return element?.type === "Element" ? element : null
   },

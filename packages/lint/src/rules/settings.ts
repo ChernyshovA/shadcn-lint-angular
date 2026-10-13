@@ -1,10 +1,12 @@
 // settings.shadcn: the recognition options written once instead of once
 // per rule, with a rule's own option winning. `ui` is an import prefix,
 // what components.json's aliases.ui is for projects without that file.
-// `themeImports` is the project's, not a rule's: it goes to the theme
-// reader rather than into the options.
+// `themeImports` and `entryPoint` are the project's, not a rule's: they
+// go to the theme reader rather than into the options.
 
-import { setThemeImports } from "../project/theme"
+import * as path from "node:path"
+
+import { setEntryPoint, setThemeImports } from "../project/theme"
 import { warnOnce } from "../project/warn"
 import { fileOf } from "./messages"
 
@@ -63,12 +65,38 @@ function recordThemeImports(context: any, settings: any) {
   )
 }
 
+// The stylesheet that imports Tailwind, named the way
+// eslint-plugin-better-tailwindcss names it, from where ESLint runs.
+// Without components.json, or with a Sass entry no CSS file replaces, it
+// is the only way to name one.
+function recordEntryPoint(context: any, settings: any) {
+  const value =
+    settings && typeof settings === "object" ? settings.entryPoint : null
+  if (value != null && (typeof value !== "string" || !value)) {
+    warnOnce(
+      "settings:entryPoint",
+      "settings.shadcn.entryPoint must be a string; it is ignored."
+    )
+  }
+  const written = typeof value === "string" && value ? value : null
+  setEntryPoint(
+    fileOf(context),
+    written === null
+      ? null
+      : {
+          file: path.resolve(context.cwd ?? process.cwd(), written),
+          written,
+        }
+  )
+}
+
 export function withSettings<T extends Record<string, unknown>>(
   context: any,
   options: T
 ) {
   const settings = context.settings?.shadcn
   recordThemeImports(context, settings)
+  recordEntryPoint(context, settings)
   if (!settings || typeof settings !== "object") return options
   const merged: Record<string, unknown> = { ...options }
   for (const key of SHARED) {

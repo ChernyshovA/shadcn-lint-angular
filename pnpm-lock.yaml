@@ -100,6 +100,9 @@ importers:
         specifier: 0.4.0
         version: 0.4.0
     devDependencies:
+      '@angular-eslint/bundled-angular-compiler':
+        specifier: ^22.6.0
+        version: 22.6.0
       '@angular-eslint/eslint-plugin-template':
         specifier: ^22.6.0
         version: 22.6.0(@angular-eslint/template-parser@22.6.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(@typescript-eslint/types@8.69.0)(@typescript-eslint/utils@8.69.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3)

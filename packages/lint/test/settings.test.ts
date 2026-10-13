@@ -136,6 +136,34 @@ describe("settings.shadcn as shared defaults", () => {
     expect(viaSetting).toEqual(viaOption)
   })
 
+  test("a helper from mergeFunctions reads what a function passed to it returns", () => {
+    const code = [
+      `import { classes } from "./classes"`,
+      `const a = classes(() => "p-[1px]")`,
+      `const b = classes(() => {`,
+      `  const inner = () => "p-[9px]"`,
+      `  if (a) return "p-[2px]"`,
+      `  return a ? "p-[3px]" : null`,
+      `})`,
+      `const c = other(() => "p-[8px]")`,
+      `export const A = () => <div className={classes(a, b, c)} />`,
+    ].join("\n")
+    const found = (settings?: object) =>
+      lint(
+        PROJECT,
+        PAGE,
+        code,
+        { "shadcn/no-arbitrary-values": "error" },
+        settings
+      ).map((m) => m.message.split('"')[1])
+    expect(found({ shadcn: { mergeFunctions: ["classes"] } })).toEqual([
+      "p-[1px]",
+      "p-[2px]",
+      "p-[3px]",
+    ])
+    expect(found()).toEqual([])
+  })
+
   test("a rule's own option wins over the setting", () => {
     const settings = { shadcn: { componentImports: ["^@/ds(/|$)"] } }
     const found = lint(

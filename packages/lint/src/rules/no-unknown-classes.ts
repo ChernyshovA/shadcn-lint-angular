@@ -7,8 +7,10 @@ import { categoryOf } from "../grammar/categories"
 import { isMarkerClass, normalizeClass, splitClasses } from "../grammar/classes"
 import { didYouMean } from "../grammar/similar"
 import {
+  angularFileClassesOf,
   angularGlobalClassesOf,
   angularOwnClassesOf,
+  type OwnClasses,
 } from "../project/angular-styles"
 import { projectClassifierFor } from "../project/namespaces"
 import { isSfc, styleClassesOf } from "../project/parser"
@@ -25,6 +27,7 @@ import { warnOnce } from "../project/warn"
 import { classSiteVisitors } from "../sites/collect"
 import { readerFor } from "../sites/readers"
 import { angularReader } from "../sites/readers/angular"
+import { hostBindingOf } from "../sites/readers/angular-host"
 import { unknownClasses } from "../tailwind/client"
 import { compileVocabularyPolicy, configErrorVisitors } from "./contracts"
 import { classSuggestions } from "./fixes"
@@ -34,9 +37,12 @@ import { policySchema, recognitionSchema } from "./policy-schema"
 import { withSettings } from "./settings"
 
 // Styles that cannot be read settle every class in the template, so the
-// rule says once per component that it is not checking there.
-function angularOwnClasses(context: any, filename: string) {
-  const own = angularOwnClassesOf(context.filename ?? filename, filename)
+// rule says once per component that it is not checking there. Host
+// bindings in the component's .ts are judged by the same styles.
+function angularOwnClasses(context: any, filename: string, host = false) {
+  const own = host
+    ? angularFileClassesOf(filename)
+    : angularOwnClassesOf(context.filename ?? filename, filename)
   const { unread } = own
   if (unread?.file) {
     warnOnce(
@@ -69,6 +75,13 @@ const MESSAGES = {
     '"{{className}}" is not a class this project\'s Tailwind knows, so no CSS is generated for it. Fix the spelling, or declare it with @utility in {{file}}.',
   unknownClassSuggest:
     '"{{className}}" is not a class this project\'s Tailwind knows, so no CSS is generated for it. Did you mean "{{suggestion}}"?',
+  // A host's element sits in the template of whichever component renders
+  // it, so that component's styles reach it, and which one that is is
+  // not known here.
+  unknownHostClass:
+    '"{{className}}" is not a class this project\'s Tailwind knows, so no CSS is generated for it. Fix the spelling, or declare it with @utility in {{file}}. If the stylesheet of a component that renders this host styles it, add it to allow.',
+  unknownHostClassSuggest:
+    '"{{className}}" is not a class this project\'s Tailwind knows, so no CSS is generated for it. Did you mean "{{suggestion}}"? If the stylesheet of a component that renders this host styles it, add it to allow.',
   unknownVariant:
     '"{{className}}" uses a variant this project\'s Tailwind does not know, so no CSS is generated for it. Use an existing variant, or declare it with @custom-variant in {{file}}.',
   useSuggestion: 'Replace with "{{suggestion}}".',
@@ -136,16 +149,20 @@ export const noUnknownClasses = {
       (!prefix || token.startsWith(`${prefix}:`)) && isColor(token)
 
     // What the project's CSS settles without asking Tailwind.
-    const settled = (token: string) => {
+    // A host binding's classes land on the component's own element.
+    let hostClasses: OwnClasses | undefined
+    const ownClassesOf = (site: { node: any }) =>
+      hostBindingOf(site.node)
+        ? (hostClasses ??= angularOwnClasses(context, filename, true))
+        : ownClasses
+    const settled = (token: string, own = ownClasses) => {
       const base = normalizeClass(token)
       if (!base) return true
       if (base.startsWith("[")) return true
       if (isMarkerClass(token)) return true
       const bare = base.replace(/\/[\w.%]+$/, "")
       return (
-        known.classes.has(bare) ||
-        ownClasses.has(bare) ||
-        !!globalClasses?.has(bare)
+        known.classes.has(bare) || own.has(bare) || !!globalClasses?.has(bare)
       )
     }
 
@@ -163,16 +180,21 @@ export const noUnknownClasses = {
       suggestion: string | null,
       words: string | null,
       component: string,
+      host: boolean,
       variantOnly = false
     ) => {
       emit(
         {
           node,
           messageId: suggestion
-            ? "unknownClassSuggest"
+            ? host
+              ? "unknownHostClassSuggest"
+              : "unknownClassSuggest"
             : variantOnly
               ? "unknownVariant"
-              : "unknownClass",
+              : host
+                ? "unknownHostClass"
+                : "unknownClass",
           data: {
             className: token,
             component,
@@ -210,10 +232,12 @@ export const noUnknownClasses = {
     }
 
     return classSiteVisitors(context, options, (site) => {
+      const own = ownClassesOf(site)
+      const host = hostBindingOf(site.node) !== null
       for (const { value, node } of site.vocabularyStrings) {
         const wordsFor = new Map<string, string | null>()
         const tokens = splitClasses(value).filter((token) => {
-          if (settled(token)) return false
+          if (settled(token, own)) return false
           const exemption = policy.decide(site.component, token)
           if (exemption.kind === "ok") return false
           wordsFor.set(token, exemption.message)
@@ -237,6 +261,7 @@ export const noUnknownClasses = {
               suggestion,
               wordsFor.get(token) ?? null,
               site.component ?? "",
+              host,
               baseKnown && token.includes(":")
             )
           }
@@ -249,7 +274,8 @@ export const noUnknownClasses = {
               token,
               null,
               wordsFor.get(token) ?? null,
-              site.component ?? ""
+              site.component ?? "",
+              host
             )
         }
       }

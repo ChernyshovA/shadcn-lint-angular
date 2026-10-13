@@ -1,0 +1,1 @@
+{ "name": "fixture-entryless-workspace", "private": true, "workspaces": ["packages/*"] }

@@ -20,6 +20,7 @@ import {
   attributeNameIn,
   attributeOfContainer,
   isContainer,
+  keysClasses,
   readerFor,
   type ElementName,
   type Visitors,
@@ -928,7 +929,12 @@ export function collectClassStrings(
           if (valueHelpers.has(callee)) {
             for (const arg of node.arguments) visitVariantConfig(arg)
           } else {
-            for (const arg of node.arguments) visit(arg, false)
+            for (const arg of node.arguments) {
+              // spartan's `classes(() => "p-4")` merges what it returns.
+              if (arg?.type === "ArrowFunctionExpression") {
+                for (const value of returnedValues(arg)) visit(value, false)
+              } else visit(arg, false)
+            }
           }
           if (hopped) resolvedCalls--
           return
@@ -1017,6 +1023,40 @@ export function collectClassStrings(
 
   visit(expression, options.valuesMode ?? false)
   return { contextualStrings, vocabularyStrings, unresolved }
+}
+
+const FUNCTIONS = new Set([
+  "ArrowFunctionExpression",
+  "FunctionDeclaration",
+  "FunctionExpression",
+  "ClassDeclaration",
+  "ClassExpression",
+])
+
+// What a function returns: its expression body, or each `return` in its
+// block, past the functions nested in it.
+function returnedValues(fn: any) {
+  if (fn.body?.type !== "BlockStatement") return [fn.body]
+  const out: any[] = []
+  const walk = (node: any) => {
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item)
+      return
+    }
+    if (!node || typeof node.type !== "string" || FUNCTIONS.has(node.type))
+      return
+    if (node.type === "ReturnStatement") {
+      if (node.argument) out.push(node.argument)
+      return
+    }
+    for (const key in node) {
+      if (key === "parent" || key === "loc" || key === "range") continue
+      const value = node[key]
+      if (value && typeof value === "object") walk(value)
+    }
+  }
+  walk(fn.body.body)
+  return out
 }
 
 function keyNodeOf(object: any, entry: { key: string; value: any }) {
@@ -1253,7 +1293,7 @@ export function classSiteVisitors(
   ): ClassSite => {
     // Markup's own `class` takes an object the way clsx does, keys as
     // classes. Anywhere else an object is a classNames map.
-    const keyed = reader.classObjects === true && attribute === "class"
+    const keyed = keysClasses(reader, node, attribute)
     const classes =
       value && !keyed
         ? collectFromValue(value, context, collectOptions)
@@ -1336,6 +1376,8 @@ export function classSiteVisitors(
       )
         return
       for (const site of attributeSites(node)) emit(site)
+      for (const string of reader.sourceStrings?.(node) ?? [])
+        reportedStrings.add(string)
     })
   }
   for (const type of reader.spreads) {
