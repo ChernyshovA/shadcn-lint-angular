@@ -1,0 +1,10 @@
+{
+  "name": "react",
+  "sourceRoot": "apps/react/src",
+  "targets": {
+    "build": {
+      "executor": "@nx/webpack:webpack",
+      "options": { "styles": ["apps/react/src/react.css"] }
+    }
+  }
+}

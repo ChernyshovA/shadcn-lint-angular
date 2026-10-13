@@ -8,6 +8,47 @@ import type { TemplateReader } from "./types"
 
 const literals = new WeakMap<object, any>()
 
+// An inline template written as a template string with `${x}` reaches
+// the parser as source text: the interpolation is JavaScript the
+// processor does not run. It and the token glued to it are blanked to
+// spaces of the same length, so what is read is what is written out and
+// every offset stays where it was, the way a glued interpolation in a JSX
+// template literal leaves no class of its own.
+function withoutInterpolations(value: string) {
+  if (!value.includes("${")) return value
+  let out = ""
+  let i = 0
+  while (i < value.length) {
+    const start = value.indexOf("${", i)
+    if (start === -1) {
+      out += value.slice(i)
+      break
+    }
+    let end = start + 2
+    let depth = 1
+    while (end < value.length && depth > 0) {
+      const c = value[end]
+      if (c === "{") depth++
+      else if (c === "}") depth--
+      else if (c === '"' || c === "'" || c === "`") {
+        const close = value.indexOf(c, end + 1)
+        if (close !== -1) end = close
+      }
+      end++
+    }
+    const before = value
+      .slice(i, start)
+      .replace(/\S+$/, (m) => " ".repeat(m.length))
+    // Up to the next interpolation, which the next round blanks.
+    const tail = /^\S*/.exec(value.slice(end))![0]
+    const next = tail.indexOf("${")
+    const glued = next === -1 ? tail.length : next
+    out += before + " ".repeat(end - start + glued)
+    i = end + glued
+  }
+  return out
+}
+
 // The value as a literal over its quotes, where JSX and Vue place theirs.
 // Lines and columns are the parser's own count, so a finding lines up
 // with its nodes and its comments. Built once per attribute so every rule
@@ -27,7 +68,7 @@ function literalOf(attribute: any) {
   const pad = quoted ? 1 : 0
   literal = {
     type: "AngularLiteral",
-    value: attribute.value,
+    value: withoutInterpolations(attribute.value),
     range: [start.offset - pad, end.offset + pad],
     loc: {
       start: { line: start.line + 1, column: start.col - pad },
@@ -47,6 +88,11 @@ function tagOf(element: any) {
 
 export const angularReader: TemplateReader = {
   attributes: ["TextAttribute"],
+  // The router adds these classes while the link is active.
+  classAttributes: ["routerLinkActive"],
+  // PrimeNG's StyleClass takes the element it toggles classes on:
+  // `pStyleClass="@next"`. Its enterActiveClass and the rest are classes.
+  notClassAttributes: ["pStyleClass"],
   spreads: [],
   staticStyles: true,
   attributeName: (node) => (typeof node?.name === "string" ? node.name : ""),

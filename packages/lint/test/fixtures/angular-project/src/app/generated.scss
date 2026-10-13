@@ -1,0 +1,5 @@
+@each $tone in (red, blue) {
+  .#{$tone} {
+    color: $tone;
+  }
+}

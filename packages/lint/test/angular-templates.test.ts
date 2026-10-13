@@ -5,11 +5,12 @@ import templatePlugin from "@angular-eslint/eslint-plugin-template"
 import * as ngParser from "@angular-eslint/template-parser"
 import tsParser from "@typescript-eslint/parser"
 import { Linter } from "eslint"
-import { describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
 import { plugin } from "../src/plugin"
 import { ownClassesOfCss } from "../src/project/angular-styles"
 import { useParser } from "../src/project/parser"
+import { resetWarnings, setWarningSink } from "../src/project/warn"
 import { angularReader } from "../src/sites/readers/angular"
 
 const PROJECT = path.resolve(
@@ -241,6 +242,21 @@ describe("Angular templates", () => {
     expect(messages[0].suggestions).toBeUndefined()
   })
 
+  it("reads what an inline template string writes out around its interpolations", () => {
+    const code = [
+      `import { Component } from "@angular/core"`,
+      "@Component({",
+      `  selector: "app-x",`,
+      "  template: `<div class=\"p-4 ${a} btn-${size} ${c ? 'p-[13px] x' : ''}glued ${d}${e ? 'q w' : ''} m-2 text-[#123456]\"></div>`,",
+      "})",
+      "export class X {}",
+    ].join("\n")
+    const messages = lintInline(code, path.join(PROJECT, "src/app/x.ts"))
+    expect(messages.map((m) => [m.ruleId, m.message.split('"')[1]])).toEqual([
+      ["shadcn/no-arbitrary-values", "text-[#123456]"],
+    ])
+  })
+
   it("offers no rewrite for a class an entity spells", () => {
     const [message] = lint(`<div class="flex&#32;p-[13px]"></div>`)
     expect(message.message).toContain(`"p-[13px]"`)
@@ -271,6 +287,37 @@ describe("Angular templates", () => {
     ])
   })
 
+  it("reads a style and an SVG color once on an element a structural directive wraps", () => {
+    const code = [
+      `<div *ngIf="open" style="color: red"></div>`,
+      `<svg><path *ngFor="let p of paths" fill="#ff0000"></path></svg>`,
+      `<ng-template ngFor let-p [ngForOf]="paths"><b style="color: red"></b></ng-template>`,
+    ].join("\n")
+    expect(lint(code).map((m) => [m.ruleId, m.line, m.column])).toEqual([
+      ["shadcn/no-inline-styles", 1, 25],
+      ["shadcn/no-raw-colors", 2, 36],
+      ["shadcn/no-inline-styles", 3, 53],
+    ])
+  })
+
+  it("counts columns past non-ASCII text the way ESLint does", () => {
+    const code = `<p title="Привет 😀"><i>ё</i></p><b class="p-[13px]"></b>`
+    const messages = lint(code)
+    expect(located(messages)).toEqual([
+      ["shadcn/no-arbitrary-values", 1, 43, 1, 53],
+    ])
+    expect(spanned(code, messages[0])).toBe(`"p-[13px]"`)
+  })
+
+  it("rewrites one class of a value written over several lines", () => {
+    const code = `<div\n  class="flex\n    p-[13px]\n    gap-2"\n></div>`
+    const [message] = lint(code)
+    const { range, text } = message.suggestions![0].fix
+    expect(code.slice(0, range[0]) + text + code.slice(range[1])).toBe(
+      `<div\n  class="flex\n    p-3.25\n    gap-2"\n></div>`
+    )
+  })
+
   it("judges each declaration of a style", () => {
     expect(
       found(`<div style="color: red; --tone: #fff; --gap: 4px"></div>`)
@@ -295,6 +342,30 @@ describe("Angular templates", () => {
       `shadcn/no-raw-colors: "bg-red-500" uses the raw Tailwind palette and no declared theme color is close to it`,
       `shadcn/no-arbitrary-values: "p-[13px]" hardcodes an off-token value`,
     ])
+  })
+
+  it("does not read the element PrimeNG's pStyleClass targets as classes", () => {
+    expect(
+      found(
+        `<button pStyleClass="@next" enterActiveClass="animate-scalin" leaveToClass="hidden"></button>`
+      )
+    ).toEqual([
+      'shadcn/no-unknown-classes: "animate-scalin" is not a class this project\'s Tailwind knows, so no CSS is generated for it',
+    ])
+  })
+
+  it("reads the classes routerLinkActive adds", () => {
+    // No "class" anywhere in the file, which a file is skipped without.
+    const code = `<a routerLink="/" routerLinkActive="font-bold bg-red-500 p-[13px]"></a>`
+    expect(found(code)).toEqual([
+      `shadcn/no-raw-colors: "bg-red-500" uses the raw Tailwind palette and no declared theme color is close to it`,
+      `shadcn/no-arbitrary-values: "p-[13px]" hardcodes an off-token value`,
+    ])
+    const [, message] = lint(code)
+    const { range, text } = message.suggestions![0].fix
+    expect(code.slice(0, range[0]) + text + code.slice(range[1])).toBe(
+      `<a routerLink="/" routerLinkActive="font-bold bg-red-500 p-3.25"></a>`
+    )
   })
 
   it("reads a color attribute on an SVG element, not on a component", () => {
@@ -375,6 +446,14 @@ describe("Angular templates", () => {
   describe.each(["oxc", "typescript"] as const)(
     "with the component's own styles, read by %s",
     (kind) => {
+      let warnings: string[] = []
+      beforeEach(() => {
+        warnings = []
+        resetWarnings()
+        setWarningSink((message) => warnings.push(message))
+      })
+      afterEach(() => setWarningSink((message) => console.warn(message)))
+
       const unknown = (code: string, file = TEMPLATE) => {
         useParser(kind)
         try {
@@ -428,6 +507,65 @@ describe("Angular templates", () => {
         ).toEqual(["card-header"])
       })
 
+      describe("when the styles cannot be read", () => {
+        it("warns once per component that its template is skipped", () => {
+          expect(
+            unknown(`<ul class="list-anything"></ul>`, "list-opaque.html")
+          ).toEqual([])
+          expect(
+            unknown(`<ul class="list-other"></ul>`, "list-opaque.html")
+          ).toEqual([])
+          expect(warnings).toEqual([
+            "[@shadcn/lint] The styles of ListOpaque in src/app/list.ts cannot be read: styles holds `shared`, not a string. shadcn/no-unknown-classes is skipped in its template, since any class there may be one they declare.",
+          ])
+        })
+
+        it("names a stylesheet that does not exist", () => {
+          expect(
+            unknown(`<div class="missing-anything"></div>`, "missing.html")
+          ).toEqual([])
+          expect(warnings).toEqual([
+            "[@shadcn/lint] The styles of Missing in src/app/missing.ts cannot be read: the stylesheet ./missing.scss does not exist. shadcn/no-unknown-classes is skipped in its template, since any class there may be one they declare.",
+          ])
+        })
+
+        it("names the selector it cannot read and the file it is in", () => {
+          expect(
+            unknown(`<div class="tone-red"></div>`, "generated.html")
+          ).toEqual([])
+          expect(warnings).toEqual([
+            "[@shadcn/lint] The styles of Generated in src/app/generated.ts cannot be read: the selector `.#{…}` starts with an interpolation in src/app/generated.scss. shadcn/no-unknown-classes is skipped in its template, since any class there may be one they declare.",
+          ])
+        })
+
+        it("does not warn when the styles are read", () => {
+          unknown(
+            `<div class="card-header flex-cols"></div>`,
+            "card.component.html"
+          )
+          unknown(`<div class="card-header"></div>`, "orphan.html")
+          expect(warnings).toEqual([])
+        })
+
+        it("skips only the inline template whose own decorator cannot be read", () => {
+          useParser(kind)
+          try {
+            const file = path.join(PROJECT, "src/app/inline-pair.ts")
+            const messages = lintInline(fs.readFileSync(file, "utf8"), file)
+            expect(
+              messages
+                .filter((m) => m.ruleId === "shadcn/no-unknown-classes")
+                .map((m) => m.message.split('"')[1])
+            ).toEqual(["pair-unknown"])
+            expect(warnings).toEqual([
+              "[@shadcn/lint] The styles of InlineSpread in src/app/inline-pair.ts cannot be read: the decorator spreads `...base`. shadcn/no-unknown-classes is skipped in its template, since any class there may be one they declare.",
+            ])
+          } finally {
+            useParser(null)
+          }
+        })
+      })
+
       it("reads an inline template's styles from its own decorator", () => {
         useParser(kind)
         try {
@@ -444,6 +582,109 @@ describe("Angular templates", () => {
       })
     }
   )
+
+  describe("with the project's global styles", () => {
+    const FIXTURES = path.dirname(PROJECT)
+    let warnings: string[] = []
+    beforeEach(() => {
+      warnings = []
+      resetWarnings()
+      setWarningSink((message) => warnings.push(message))
+    })
+    afterEach(() => setWarningSink((message) => console.warn(message)))
+
+    const unknownIn = (workspace: string, file: string, code: string) => {
+      const dir = path.join(FIXTURES, workspace)
+      return new Linter({ cwd: dir })
+        .verify(
+          code,
+          [
+            {
+              files: ["**/*.html"],
+              languageOptions: { parser: ngParser as any },
+              plugins: { shadcn: plugin as any },
+              rules: { "shadcn/no-unknown-classes": "error" },
+            },
+          ],
+          { filename: path.join(dir, file) }
+        )
+        .map((m) => m.message.split('"')[1])
+    }
+
+    it("knows the classes the styles in angular.json declare, through includePaths, packages and load-css", () => {
+      expect(
+        unknownIn(
+          "angular-workspace",
+          "src/app/page.component.html",
+          `<div class="page-shell page-shell-header from-include fi fi-check pkg-loaded pkg-extra page-own from-component-include page-shel"></div>`
+        )
+      ).toEqual(["page-shel"])
+      expect(warnings).toEqual([])
+    })
+
+    it("reads the styles of the project the file is in", () => {
+      expect(
+        unknownIn(
+          "angular-nx",
+          "apps/web/src/app/home.html",
+          `<div class="web-global admin-global"></div>`
+        )
+      ).toEqual(["admin-global"])
+    })
+
+    it("reads every Angular project's styles for a library that names none", () => {
+      expect(
+        unknownIn(
+          "angular-nx",
+          "libs/ui/src/button.html",
+          `<div class="web-global admin-global react-global lib-unknown"></div>`
+        )
+      ).toEqual(["react-global", "lib-unknown"])
+    })
+
+    it("warns once and stays quiet in a project whose global styles cannot be read", () => {
+      for (const name of ["anything", "else"]) {
+        expect(
+          unknownIn(
+            "angular-workspace",
+            "projects/broken/src/broken.html",
+            `<div class="${name}"></div>`
+          )
+        ).toEqual([])
+      }
+      expect(warnings).toEqual([
+        "[@shadcn/lint] The global styles angular.json names cannot be read: the stylesheet projects/broken/missing.scss does not exist. shadcn/no-unknown-classes is skipped in this project, since any class may be one they declare.",
+      ])
+    })
+
+    it("warns once when Tailwind is imported only from Sass", () => {
+      for (const name of ["p-4", "p-5"]) {
+        unknownIn(
+          "angular-sass-entry",
+          "src/app/page.html",
+          `<div class="${name}"></div>`
+        )
+      }
+      const where = path.relative(
+        process.cwd(),
+        path.join(FIXTURES, "angular-sass-entry")
+      )
+      expect(warnings).toEqual([
+        `[@shadcn/lint] src/styles.scss imports Tailwind, but a Sass file is not read as the Tailwind entry and no CSS file under ${where} imports it, so no-unknown-classes reads classes with the grammar bundled with @shadcn/lint, and the project's theme is not read. Set tailwind.css in components.json to a CSS file that imports Tailwind and the same plugins.`,
+      ])
+    })
+
+    it("warns once when no stylesheet imports Tailwind", () => {
+      unknownIn("angular-no-entry", "src/app/page.html", `<div></div>`)
+      const where = path.relative(
+        process.cwd(),
+        path.join(FIXTURES, "angular-no-entry")
+      )
+      expect(warnings).toEqual([
+        `[@shadcn/lint] No stylesheet importing Tailwind was found under ${where}, so no-unknown-classes reads classes with the grammar bundled with @shadcn/lint, and the project's theme is not read. Set tailwind.css in components.json to the stylesheet that imports Tailwind.`,
+      ])
+    })
+  })
 
   describe("reading a component stylesheet", () => {
     const knows = (

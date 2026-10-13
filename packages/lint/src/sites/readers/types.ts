@@ -26,6 +26,11 @@ export type ExtraSite = {
 
 export type TemplateReader = {
   attributes: string[]
+  // Attributes that hold classes under a name of their own, past the
+  // class-like names every reader shares.
+  classAttributes?: string[]
+  // Attributes whose class-like name holds something else.
+  notClassAttributes?: string[]
   spreads: string[]
   attributeName: (node: any) => string
   // Null when the attribute has no value.

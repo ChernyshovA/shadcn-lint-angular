@@ -1149,7 +1149,10 @@ function sharedFor(context: any, options: SiteOptions): Shared {
     consumedCalls,
     sites: new WeakMap(),
     hasSites:
-      typeof text !== "string" || /class/i.test(text) || helperCall.test(text),
+      typeof text !== "string" ||
+      /class/i.test(text) ||
+      helperCall.test(text) ||
+      !!readerFor(context).classAttributes?.some((name) => text.includes(name)),
   }
   byKey.set(key, shared)
   return shared
@@ -1325,7 +1328,13 @@ export function classSiteVisitors(
   const visitors: Visitors = {}
   for (const type of reader.attributes) {
     addVisitor(visitors, type, (node: any) => {
-      if (!isClassAttribute(reader.attributeName(node))) return
+      const name = reader.attributeName(node)
+      if (
+        (!isClassAttribute(name) ||
+          reader.notClassAttributes?.includes(name)) &&
+        !reader.classAttributes?.includes(name)
+      )
+        return
       for (const site of attributeSites(node)) emit(site)
     })
   }

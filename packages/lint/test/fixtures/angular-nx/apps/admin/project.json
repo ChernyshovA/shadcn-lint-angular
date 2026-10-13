@@ -1,0 +1,10 @@
+{
+  "name": "admin",
+  "sourceRoot": "apps/admin/src",
+  "targets": {
+    "build": {
+      "executor": "@nx/angular:application",
+      "options": { "styles": ["apps/admin/src/admin.scss"] }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+@use "sass:meta";
+@use "layout";
+@use "fake-styled/extra";
+
+@layer base {
+  @include meta.load-css("fake-styled", $with: ("ignored": "not-a-file"));
+}
+
+.page-shell {
+  &-header {
+    display: flex;
+  }
+}

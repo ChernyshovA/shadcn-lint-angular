@@ -473,7 +473,12 @@ const SKIP_DIRS = new Set([
   ".registry",
 ])
 
-function cssFilesUnder(dir: string, depth: number, out: string[]) {
+function cssFilesUnder(
+  dir: string,
+  depth: number,
+  out: string[],
+  extension: RegExp = /\.css$/
+) {
   if (depth > 5 || out.length > 200) return
   let entries: fs.Dirent[]
   try {
@@ -485,8 +490,10 @@ function cssFilesUnder(dir: string, depth: number, out: string[]) {
     if (entry.name.startsWith(".") && entry.name !== ".") continue
     const full = path.join(dir, entry.name)
     if (entry.isDirectory()) {
-      if (!SKIP_DIRS.has(entry.name)) cssFilesUnder(full, depth + 1, out)
-    } else if (entry.name.endsWith(".css")) {
+      if (!SKIP_DIRS.has(entry.name)) {
+        cssFilesUnder(full, depth + 1, out, extension)
+      }
+    } else if (extension.test(entry.name)) {
       out.push(full)
     }
   }
@@ -578,6 +585,53 @@ export function tailwindEntryFor(fromFile: string) {
     }`
   )
   return discovered
+}
+
+const SASS_TAILWIND = /@(?:use|import|forward)\s+["']tailwindcss["']/
+
+// A Sass file importing Tailwind, the way an Angular app's styles.scss
+// often does. Discovery reads CSS only.
+function sassTailwindEntryUnder(root: string) {
+  const files: string[] = []
+  cssFilesUnder(root, 0, files, /\.s[ac]ss$/)
+  return (
+    files.sort().find((file) => {
+      try {
+        return SASS_TAILWIND.test(stripComments(fs.readFileSync(file, "utf-8")))
+      } catch {
+        return false
+      }
+    }) ?? null
+  )
+}
+
+// The message, by project root: the scan runs once, the warning once
+// per run.
+const entryless = new Map<string, string | null>()
+
+// No components.json path and no stylesheet importing Tailwind: the rules
+// fall back to the bundled grammar and know no theme. Quietly, that reads
+// as a project that passed, so it is said once per project.
+export function warnNoTailwindEntry(fromFile: string) {
+  const project = projectFor(fromFile)
+  if (!project || project.cssFile) return
+  let message = entryless.get(project.root)
+  if (message === undefined) {
+    message = noEntryMessage(project.root)
+    entryless.set(project.root, message)
+  }
+  if (message) warnOnce(`theme:no-entry:${project.root}`, message)
+}
+
+function noEntryMessage(root: string) {
+  if (discoverThemeFile(root)) return null
+  const where = path.relative(process.cwd(), root) || "."
+  const sass = sassTailwindEntryUnder(root)
+  const fallback =
+    "so no-unknown-classes reads classes with the grammar bundled with @shadcn/lint, and the project's theme is not read"
+  return sass
+    ? `${relativeTo(root, sass)} imports Tailwind, but a Sass file is not read as the Tailwind entry and no CSS file under ${where} imports it, ${fallback}. Set tailwind.css in components.json to a CSS file that imports Tailwind and the same plugins.`
+    : `No stylesheet importing Tailwind was found under ${where}, ${fallback}. Set tailwind.css in components.json to the stylesheet that imports Tailwind.`
 }
 
 export function tailwindPrefixFor(fromFile: string) {

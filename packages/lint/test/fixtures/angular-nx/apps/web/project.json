@@ -1,0 +1,12 @@
+{
+  "name": "web",
+  "sourceRoot": "apps/web/src",
+  "targets": {
+    "build": {
+      "executor": "@nx/angular:application",
+      "options": {
+        "styles": ["apps/web/src/theme.css", "apps/web/src/global.scss"]
+      }
+    }
+  }
+}

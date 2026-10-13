@@ -6,7 +6,10 @@
 import { categoryOf } from "../grammar/categories"
 import { isMarkerClass, normalizeClass, splitClasses } from "../grammar/classes"
 import { didYouMean } from "../grammar/similar"
-import { angularOwnClassesOf } from "../project/angular-styles"
+import {
+  angularGlobalClassesOf,
+  angularOwnClassesOf,
+} from "../project/angular-styles"
 import { projectClassifierFor } from "../project/namespaces"
 import { isSfc, styleClassesOf } from "../project/parser"
 import {
@@ -16,7 +19,9 @@ import {
   tailwindPrefixFor,
   themeFileFor,
   utilityPrefixesOf,
+  warnNoTailwindEntry,
 } from "../project/theme"
+import { warnOnce } from "../project/warn"
 import { classSiteVisitors } from "../sites/collect"
 import { readerFor } from "../sites/readers"
 import { angularReader } from "../sites/readers/angular"
@@ -27,6 +32,37 @@ import { displayPath, fileOf, reporter } from "./messages"
 import { colorValueOf } from "./no-raw-colors"
 import { policySchema, recognitionSchema } from "./policy-schema"
 import { withSettings } from "./settings"
+
+// Styles that cannot be read settle every class in the template, so the
+// rule says once per component that it is not checking there.
+function angularOwnClasses(context: any, filename: string) {
+  const own = angularOwnClassesOf(context.filename ?? filename, filename)
+  const { unread } = own
+  if (unread?.file) {
+    warnOnce(
+      `angular-styles:${unread.file}:${unread.component}`,
+      `The styles of ${unread.component} in ${displayPath(unread.file, context)} cannot be read: ${unread.reason}${whereOf(unread.where, context)}. shadcn/no-unknown-classes is skipped in its template, since any class there may be one they declare.`
+    )
+  }
+  return own
+}
+
+// The global stylesheets of an Angular project serve every file in it,
+// and settle every class when they cannot be read.
+function angularGlobalClasses(context: any, filename: string) {
+  const global = angularGlobalClassesOf(filename)
+  const unread = global?.unread
+  if (unread?.file) {
+    warnOnce(
+      `angular-global-styles:${unread.file}`,
+      `The global styles ${displayPath(unread.file, context)} names cannot be read: ${unread.reason}${whereOf(unread.where, context)}. shadcn/no-unknown-classes is skipped in this project, since any class may be one they declare.`
+    )
+  }
+  return global
+}
+
+const whereOf = (where: string | null, context: any) =>
+  where ? ` in ${displayPath(where, context)}` : ""
 
 const MESSAGES = {
   unknownClass:
@@ -83,13 +119,15 @@ export const noUnknownClasses = {
     const ownClasses: { has: (name: string) => boolean } = isSfc(filename)
       ? styleClassesOf(context.sourceCode?.text ?? "")
       : readerFor(context) === angularReader
-        ? angularOwnClassesOf(context.filename ?? filename, filename)
+        ? angularOwnClasses(context, filename)
         : new Set<string>()
+    const globalClasses = angularGlobalClasses(context, filename)
     const themeFile = themeFileFor(filename)
     const file = themeFile ? displayPath(themeFile, context) : "your theme CSS"
     // A theme file that does not import Tailwind knows no base utilities,
     // so the grammar answers instead of a half-built design system.
     const entry = tailwindEntryFor(filename)
+    if (!entry) warnNoTailwindEntry(filename)
     const utilityPrefixes = utilityPrefixesOf(known.utilities)
     // Under prefix(tw), no-raw-colors leaves an unprefixed text-muted to
     // this rule: it is no more a Tailwind class than flex is.
@@ -104,7 +142,11 @@ export const noUnknownClasses = {
       if (base.startsWith("[")) return true
       if (isMarkerClass(token)) return true
       const bare = base.replace(/\/[\w.%]+$/, "")
-      return known.classes.has(bare) || ownClasses.has(bare)
+      return (
+        known.classes.has(bare) ||
+        ownClasses.has(bare) ||
+        !!globalClasses?.has(bare)
+      )
     }
 
     // Without Tailwind: the cn grammar plus @utility names.

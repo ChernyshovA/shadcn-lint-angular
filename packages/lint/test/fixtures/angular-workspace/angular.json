@@ -1,0 +1,39 @@
+{
+  "$schema": "./node_modules/@angular/cli/lib/config/schema.json",
+  "version": 1,
+  "projects": {
+    "app": {
+      "projectType": "application",
+      "root": "",
+      "sourceRoot": "src",
+      "architect": {
+        "build": {
+          "builder": "@angular/build:application",
+          "options": {
+            "styles": [
+              "src/styles.css",
+              "src/styles/global.scss",
+              {
+                "input": "node_modules/fake-icons/icons.css",
+                "bundleName": "icons",
+                "inject": true
+              }
+            ],
+            "stylePreprocessorOptions": {
+              "includePaths": ["src/styles/partials"]
+            }
+          }
+        }
+      }
+    },
+    "broken": {
+      "projectType": "application",
+      "root": "projects/broken",
+      "architect": {
+        "build": {
+          "options": { "styles": ["projects/broken/missing.scss"] }
+        }
+      }
+    }
+  }
+}
