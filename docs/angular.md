@@ -317,7 +317,9 @@ component an NgModule declares, what that module can use (see
 [Libraries and NgModules](#libraries-and-ngmodules)), followed through
 tsconfig paths, barrels and the arrays a library exports them in, such
 as spartan's `HlmButtonImports`, and the selector each `@Directive` or
-`@Component` declares. A tag stands for a selector that is the tag
+`@Component` declares. The paths are those of the `tsconfig.json` beside
+the nearest `package.json`, or of `tsconfig.base.json` there when there
+is none, as in an Nx workspace. A tag stands for a selector that is the tag
 alone: a directive on `p-select[multiple]` adds to the `p-select`
 component and is not it. The `cva` that class uses gives them, as it
 does for a `.tsx` component, or when the file declares no other

@@ -4,13 +4,14 @@
 // directives: `hlmBtn` is that name, `/^hlm/` a regex.
 
 import * as fs from "node:fs"
+import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import templatePlugin from "@angular-eslint/eslint-plugin-template"
 import * as ngParser from "@angular-eslint/template-parser"
 import tsParser from "@typescript-eslint/parser"
 import { Linter } from "eslint"
-import { describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
 import { plugin } from "../src/plugin"
 import { setAngularCompilerForTests } from "../src/sites/readers/angular-compiler"
@@ -670,5 +671,66 @@ describe("variants of the directive a name stands for", () => {
       "Use a button uiBtn size: default, sm, lg.",
       "Use a button uiBtn variant: default, outline, ghost.",
     ])
+  })
+})
+
+// Nx keeps the workspace's paths in a root tsconfig.base.json, with no
+// tsconfig.json beside it: an import through them is followed, so a
+// directive that styles nothing is known for one.
+describe("a directive imported through an Nx tsconfig.base.json", () => {
+  let root: string
+  function write(name: string, source: string) {
+    const file = path.join(root, name)
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, source)
+    return file
+  }
+  beforeEach(() => {
+    root = fs.realpathSync.native(
+      fs.mkdtempSync(path.join(os.tmpdir(), "shadcn-lint-nx-angular-"))
+    )
+    write("package.json", "{}")
+    write(
+      "tsconfig.base.json",
+      JSON.stringify({
+        compilerOptions: {
+          baseUrl: ".",
+          paths: { "@acme/ui/tooltip": ["libs/ui/tooltip/src/index.ts"] },
+        },
+      })
+    )
+    write("libs/ui/tooltip/src/index.ts", `export * from "./lib/ui-tooltip"\n`)
+    write(
+      "libs/ui/tooltip/src/lib/ui-tooltip.ts",
+      [
+        `import { Directive, input } from "@angular/core"`,
+        `@Directive({ selector: "[uiTooltip]" })`,
+        `export class UiTooltip {`,
+        `  readonly uiTooltip = input("")`,
+        `}`,
+      ].join("\n")
+    )
+    write(
+      "apps/web/src/app/page.component.ts",
+      [
+        `import { Component } from "@angular/core"`,
+        `import { UiTooltip } from "@acme/ui/tooltip"`,
+        `@Component({ selector: "app-page", templateUrl: "./page.component.html", imports: [UiTooltip] })`,
+        `export class PageComponent {}`,
+      ].join("\n")
+    )
+  })
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
+
+  it("leaves an element only a directive that styles nothing names alone", () => {
+    const code = `<div uiTooltip="Hi" class="bg-red-500"></div>`
+    expect(
+      lint(
+        code,
+        { allow: ["layout"], contracts: [{ pattern: "/^ui/" }] },
+        path.join(root, "apps/web/src/app/page.component.html"),
+        root
+      )
+    ).toEqual([])
   })
 })
