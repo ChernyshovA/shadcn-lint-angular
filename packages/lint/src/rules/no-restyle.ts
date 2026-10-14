@@ -8,7 +8,13 @@ import { NODE_MODULES } from "../project/fs"
 import { declaresClass } from "../project/theme"
 import { sizeNamesFor, variantNamesFor } from "../project/variants"
 import { classSiteVisitors, type ClassSite } from "../sites/collect"
-import { compileContracts, configErrorVisitors } from "./contracts"
+import { readerFor } from "../sites/readers"
+import { angularRestyle } from "./angular-restyle"
+import {
+  compileContracts,
+  configErrorVisitors,
+  type Verdict,
+} from "./contracts"
 import { displayPath, fileOf, reporter } from "./messages"
 import { entriesSchema, recognitionSchema } from "./policy-schema"
 import { withSettings } from "./settings"
@@ -93,6 +99,10 @@ export const noRestyle = {
               additionalProperties: false,
             },
           },
+          // An Angular element whose names match several contracts takes
+          // a class any of them allows, or with "all" only one every one
+          // allows.
+          multipleContracts: { enum: ["any", "all"] },
         },
         additionalProperties: false,
       },
@@ -103,6 +113,7 @@ export const noRestyle = {
     const emit = reporter(context, MESSAGES)
     const options = withSettings(context, context.options?.[0] ?? {})
     const filename = fileOf(context)
+    const reader = readerFor(context)
     let contracts: ReturnType<typeof compileContracts>
     try {
       contracts = compileContracts(options.contracts, {
@@ -111,31 +122,35 @@ export const noRestyle = {
         message: options.message,
         fromFile: filename,
       })
+      if (reader.contractNames) contracts.compileNames()
     } catch (error) {
       return configErrorVisitors(context, error)
     }
+    // An Angular template names its elements by the contracts instead.
+    const angular = reader.contractNames
+      ? angularRestyle(context, reader, contracts, options)
+      : null
 
     return classSiteVisitors(context, options, (site) => {
-      if (!site.component) return
-      const component = site.component
-      const file = site.componentFile
-      // A package recognized through componentImports is read for its
-      // variants, but no message sends anyone into node_modules to add one.
-      const shown = file && !NODE_MODULES.test(file) ? file : null
-      const shownPath = shown ? displayPath(shown, context) : ""
-      const where = shownPath ? `in ${shownPath}` : `to <${component}>`
-      let details: ReturnType<typeof appearanceDetails> | undefined
-      // Read once per site, on the first finding, like the variants.
-      let sizes: string[] | null | undefined
+      const judge = angular
+        ? angular.judgeOf(site)
+        : componentJudge(site, contracts, filename)
+      if (!judge) return
+      // Read once per subject, on its first finding, like the variants.
+      const reads = new Map<Subject, ReturnType<typeof readSubject>>()
 
       for (const { value, node } of site.contextualStrings) {
         for (const token of splitClasses(value)) {
-          const verdict = contracts.decide(component, token)
-          if (verdict.kind === "ok") continue
-          details ??= appearanceDetails(site)
-          if (sizes === undefined) {
-            sizes = file ? sizeNamesFor(file, component) : null
+          const refused = judge(token)
+          if (!refused) continue
+          const { verdict, subject } = refused
+          const { component } = subject
+          let read = reads.get(subject)
+          if (!read) {
+            read = readSubject(subject, context)
+            reads.set(subject, read)
           }
+          const { details, sizes, variantsAt, sizesAt } = read
           const { messageId, variantNames, variantsSuffix } = details
           // Every finding carries the same slots, whatever the category,
           // so a contract's own words can interpolate any of them.
@@ -146,9 +161,8 @@ export const noRestyle = {
             category: verdict.category,
             variants: variantNames,
             sizes: sizes?.join(", ") ?? "",
-            wrapper: site.wrapper ?? "",
-            file: shownPath,
-            where,
+            wrapper: subject.wrapper ?? "",
+            ...variantsAt,
           }
 
           if (
@@ -163,7 +177,8 @@ export const noRestyle = {
                   verdict.kind === "denied"
                     ? "deniedClass"
                     : verdict.category === "unclassified"
-                      ? declaresClass(filename, token)
+                      ? declaresClass(filename, token) ||
+                        angular?.declares(token)
                         ? "declaredClass"
                         : "unclassifiedClass"
                       : verdict.entries.length
@@ -177,23 +192,14 @@ export const noRestyle = {
             emit(
               {
                 node,
-                messageId: site.wrapper
+                messageId: subject.wrapper
                   ? sizes
                     ? "spacingClassViaWrapperWithSizes"
                     : "spacingClassViaWrapperNoSizes"
                   : sizes
                     ? "spacingClassWithSizes"
                     : "spacingClassNoSizes",
-                data: {
-                  ...data,
-                  around: aroundFor(
-                    site,
-                    contracts,
-                    component,
-                    token,
-                    filename
-                  ),
-                },
+                data: { ...data, ...sizesAt, around: subject.around(token) },
               },
               verdict.message
             )
@@ -211,6 +217,78 @@ export const noRestyle = {
       }
     })
   },
+}
+
+// What a site's classes are judged by: for each class, null when it
+// passes, else the verdict and the component the finding names.
+export type Judge = (
+  token: string
+) => { verdict: Exclude<Verdict, { kind: "ok" }>; subject: Subject } | null
+
+// The component a finding names, and what its messages read from it.
+export type Subject = {
+  component: string
+  wrapper: string | null
+  // Where space around it goes, for a spacing finding.
+  around: (token: string) => string
+  // Whether what defines it was found, and its variants and its sizes,
+  // each with the file a new one goes in.
+  read: () => {
+    known: boolean
+    variants: { file: string | null; names: string[] | null }
+    sizes: { file: string | null; names: string[] | null }
+  }
+}
+
+// A site on a component is judged by the component's contract.
+function componentJudge(
+  site: ClassSite,
+  contracts: ReturnType<typeof compileContracts>,
+  filename: string | undefined
+): Judge | null {
+  if (!site.component) return null
+  const component = site.component
+  const file = site.componentFile
+  const subject: Subject = {
+    component,
+    wrapper: site.wrapper,
+    around: (token) =>
+      aroundFor(site, contracts, component, token, filename) ?? "",
+    read: () => ({
+      known: !!file,
+      variants: {
+        file,
+        names: file ? variantNamesFor(file, component) : null,
+      },
+      sizes: { file, names: file ? sizeNamesFor(file, component) : null },
+    }),
+  }
+  return (token) => {
+    const verdict = contracts.decide(component, token)
+    return verdict.kind === "ok" ? null : { verdict, subject }
+  }
+}
+
+// What a subject's findings share, read on its first one.
+function readSubject(subject: Subject, context: any) {
+  const { known, variants, sizes } = subject.read()
+  // The file a message sends a new variant or size to. A package
+  // recognized through componentImports is read for its variants, but no
+  // message sends anyone into node_modules to add one.
+  const at = (file: string | null) => {
+    const shown = file && !NODE_MODULES.test(file) ? file : null
+    const shownPath = shown ? displayPath(shown, context) : ""
+    return {
+      file: shownPath,
+      where: shownPath ? `in ${shownPath}` : `to <${subject.component}>`,
+    }
+  }
+  return {
+    details: appearanceDetails(subject, known, variants.names),
+    sizes: sizes.names,
+    variantsAt: at(variants.file),
+    sizesAt: at(sizes.file),
+  }
 }
 
 // Where space around a component goes, as a noun phrase, built only from
@@ -258,13 +336,14 @@ function listOf(names: string[]) {
 }
 
 // Only diagnostics need variants, so an accepted class parses nothing.
-function appearanceDetails(site: ClassSite) {
-  const variants = site.componentFile
-    ? variantNamesFor(site.componentFile, site.component!)
-    : null
-  const messageId = site.wrapper
+function appearanceDetails(
+  subject: Subject,
+  known: boolean,
+  variants: string[] | null
+) {
+  const messageId = subject.wrapper
     ? "appearanceClassViaWrapper"
-    : !site.componentFile
+    : !known
       ? "appearanceClass"
       : variants
         ? "appearanceClassWithVariants"

@@ -103,6 +103,15 @@ The global `.scss` does not replace it: its classes are read as
 classes exist. Without an entry, the rule says so once per workspace, on
 stderr, and the grammar bundled with `@shadcn/lint` answers instead.
 
+### spartan's components.json
+
+The `components.json` spartan's CLI writes has no `aliases`. A file
+without them that has a field of spartan's schema (`componentsPath`,
+`importAlias`, `buildable`, `generateAs`) is read as spartan's:
+`componentsPath` is the directory of the design-system components,
+`libs/ui` when left out, and `tailwind.css` names the entry as above. A
+file with `aliases` is read as shadcn's.
+
 ## Oxlint
 
 Oxlint does not parse Angular templates, so no plugin can see
@@ -256,7 +265,9 @@ export default defineConfig([
 
 A helper listed there also reads what an arrow function passed to it
 returns, as spartan's `classes(() => "p-4")` merges it, whether the
-arrow returns an expression or has a block with `return`. A function
+arrow returns an expression or has a block with `return`. Of a helper
+named `classes`, only that first argument is read: spartan's takes its
+options second, `{ elementRef, injector }`, not classes. A function
 passed to anything else is not read: `computed(() => "p-4")` leaves
 `"p-4"` unread. `scanAllStrings` on `no-raw-colors` and
 `no-arbitrary-values` reads every string literal in the file instead,
@@ -264,10 +275,238 @@ classes or not.
 
 ### Component names
 
-A tag with a hyphen is a component, but its selector names it, and
-selectors are not matched yet. `no-restyle` and `require-static-classes`
-do not apply to `<app-card>` or `<p-button>`, nor to a host element. The
-token rules check their classes like any element's.
+A template imports nothing a tag could be resolved through, so no
+element is a design-system component until a `no-restyle` contract names
+it. Its `pattern` matches the element's tag or the name of one of its
+attributes, bindings or events, as the template writes it: `hlmBtn`,
+`p-button`. A pattern in slashes is a regex, `/^hlm/` or `/^p-/i`, the
+way angular-eslint's options take one; any other pattern is the whole
+name, so `hlmBtn` does not match `hlmBtnGroup`.
+
+```js
+"shadcn/no-restyle": ["error", {
+  allow: ["layout"],
+  contracts: [
+    { pattern: "/^hlm/" },
+    { pattern: "hlmCardContent", allow: ["layout", "spacing"] },
+  ],
+}]
+```
+
+```html
+<!-- Allowed. -->
+<button hlmBtn class="mt-4 w-full">Save</button>
+<div hlmCardContent class="p-4">...</div>
+
+<!-- Reported. -->
+<button hlmBtn class="bg-pink-500">Save</button>
+```
+
+```text
+"bg-pink-500" is not allowed on <button hlmBtn>: <button hlmBtn> owns
+its color. Use a variant: default, outline, secondary, ghost,
+destructive, link. Add a new variant in
+libs/helm/button/src/lib/hlm-button.ts only if the design explicitly
+calls for a treatment none of these provides.
+```
+
+The variants and sizes are those of the directive the name stands for,
+found the way the compiler finds it: the template's component and what
+it can use, the classes its standalone `imports` name or, for a
+component an NgModule declares, what that module can use (see
+[Libraries and NgModules](#libraries-and-ngmodules)), followed through
+tsconfig paths, barrels and the arrays a library exports them in, such
+as spartan's `HlmButtonImports`, and the selector each `@Directive` or
+`@Component` declares. A tag stands for a selector that is the tag
+alone: a directive on `p-select[multiple]` adds to the `p-select`
+component and is not it. The `cva` that class uses gives them, as it
+does for a `.tsx` component, or when the file declares no other
+directive, the `cva` in it. What its own `cva` lacks comes from the
+directives its `hostDirectives` apply, one level down: spartan's
+`HlmInputGroupButton` has its own sizes and `HlmButton`'s variants. A
+message sends a new variant to a file that holds a `cva`, and to none
+when no file does. A directive compiled into `node_modules`, whose
+`.d.ts` holds no `cva`, or a name no selector the component can use
+matches on that element gets the message without them, and
+`{{variants}}` and `{{sizes}}` are empty in a contract's own words.
+
+`class` and `style` are not names, and neither are `[class.x]`,
+`[style.x]`, `[attr.x]` and animation bindings: no directive is matched
+by them. Nor are a reference (`#ref`), a structural directive
+(`*hlmIf`), whose template is another node, an animation's events
+(`(@fade.done)`, `(animate.leave)`) and events on `window`, `document`
+or `body`: they are not the element's own.
+
+A name takes the last contract that matches it, as a component name
+does. An element with several matched names,
+`<button hlmBtn hlmTooltipTrigger>`, takes a class any of their
+contracts allows; with `multipleContracts: "all"`, only one every
+contract allows. A finding is named after a directive whose `cva` gives
+the variants or sizes the message lists: `hlmBtn`, not the
+`hlmDropdownMenuTrigger` written before it in
+`<button [hlmDropdownMenuTrigger]="menu" hlmBtn>`, though the trigger
+styles the element too through the CDK's `CdkMenuTrigger`. A `cva` that
+gives neither is not the element's: the one beside `HlmTooltip` places
+the arrow of the tooltip it opens. Else after a directive that styles
+the element: one that takes its class into its own as spartan's
+`classes()` does, builds classes with a helper `mergeFunctions` names
+(`cn`, or `hlm` once named) in its class body, binds `class` or
+`[class]` in `host`, or takes the class into an input whose public name
+is `class`. `HlmTooltip` calls `hlm` only in its `providers` and at
+module level, for the tooltip it opens, so it does not style its
+element. Else after a name a directive the template imports stands for,
+else after the first that refused the class.
+
+A broad pattern also matches directives that only behave, such as
+`hlmTooltipTrigger`. An element is left alone when every name a contract
+matches on it stands for a directive the template can use and none of
+them styles the element: `<button hlmTooltipTrigger class="…">` is a
+plain button. That takes the directive's source, and that of the
+directives it hosts. A library compiled into `node_modules`, such as
+PrimeNG, Angular Material or spartan's brain, says it in its published
+JavaScript: the declaration the Angular linker reads for each class,
+with its `host`, the directives it hosts, and whether it inherits what
+the class it extends declares (see
+[Libraries and NgModules](#libraries-and-ngmodules)). A static class or
+a binding of `class` there styles the element, a label such as
+`cdk-menu-trigger` too. So `pTooltip`, `pStyleClass` and brain's
+triggers style nothing; `pButton`, `pRipple`, which adds `p-ripple`,
+and `matTooltip` do, and so does spartan's `HlmDropdownMenuTrigger`,
+which hosts the CDK's `CdkMenuTrigger`. Whatever its `host` says, a
+directive with an input whose public name is `class` takes the
+element's class and puts it where it likes: Material's `MatMenu` on the
+menu's panel through `panelClass`, so `<mat-menu class="…">` is judged,
+brain's `BrnDialogOverlay` through `className`. That is read from the
+source or the `.d.ts`, `@Input("class")`, `input("", { alias: "class" })`
+or `inputs: ["panelClass: class"]`, among the directive's own inputs,
+those of the class it extends and those its `hostDirectives` expose; a
+directive that hosts one and leaves its `class` unexposed takes no
+class through it. A library whose JavaScript is not installed, or
+cannot be read, counts as one whose directives may style, and so does a
+directive of yours that hosts one of them. So does a directive whose
+`host` or `@HostBinding` is written through a constant, `host: HOST`,
+and one with an input whose public name cannot be read,
+`input("", OPTIONS)`. With `/^p[A-Z]/` every `pButton` and `pRipple`
+makes its element a component whose every class is reported, and the
+contract judges `tooltipStyleClass` on every `pTooltip`. Name such a
+library's styled components and directives exactly instead:
+
+```js
+"shadcn/no-restyle": ["error", {
+  allow: ["layout"],
+  contracts: [
+    { pattern: "pButton" },
+    { pattern: "/^p-(button|card|tag)$/" },
+    { pattern: "/^mat-(card|(flat-|raised-|stroked-)?button)$/" },
+  ],
+}]
+```
+
+The classes the element itself wears, `class`, `[class]`, `[class.x]`,
+`[ngClass]`, `[attr.class]` and the classes `ngClass` and
+`routerLinkActive` add to it, are judged by the contracts of all its
+names. An input such as `styleClass`, `panelClass` or `enterActiveClass`
+hands its classes to the directive that takes it, which puts them where
+it likes, inside its component or on another element, so that
+directive's contract judges them:
+
+```html
+<!-- Reported on <p-dialog>: Dialog takes styleClass. -->
+<p-dialog styleClass="bg-pink-500"></p-dialog>
+
+<!-- matTooltipClass is MatTooltip's, so a contract on mat-icon leaves it
+     alone and one on matTooltip judges it. -->
+<mat-icon matTooltip="Delete" matTooltipClass="bg-pink-500">delete</mat-icon>
+```
+
+The directive that takes an input is the one the element matches that
+declares the input under that public name: an `@Input()`, `input()` or
+`model()` field, an entry of `inputs` in its decorator, an input of the
+class it extends, or one its `hostDirectives` expose. A component takes
+its inputs whether its selector is a tag or an attribute, as
+`button[mat-flat-button]` is. A directive no contract names judges
+nothing. When everything the template's component can use was read and
+no directive on the element declares the input, its value lands nowhere
+and is not judged: `styleClass` on PrimeNG 22.1's `<p-table>`, which
+takes `tableStyleClass`. When that cannot be told, because an import, a
+`.d.ts` or the module that declares the component cannot be read, the
+input is taken for the component whose tag a contract names. So it is
+when a decorator holds what cannot be read: a spread among its options,
+an input under a computed key, or a selector built of another file's
+constant. Lists written as constants, `imports: MATERIAL` or
+`hostDirectives: HOSTS`, are followed to them, and a selector to the
+constants its own file declares, `` selector: `${PREFIX}-card` ``. The
+token rules check an input's classes either way. An `<ng-container>`
+renders no element, so no contract judges its class.
+
+A class the component's own styles or the
+[global styles](#global-styles) declare, such as `card-header`, is
+reported as one your CSS declares, not as a misspelling.
+
+A contract written for React, `^Button$`, names no element in a
+template. `require-static-classes` and the contracts of the other rules
+do not apply to template elements, nor does `no-restyle` to a host
+element. The token rules check their classes like any element's.
+
+### Libraries and NgModules
+
+What a class is, a directive or a component with a selector and inputs,
+or a module and what it exports, is read from the first source that
+knows it, as the compiler asks its readers in turn:
+
+1. the project's own source: its `@Directive`, `@Component` and
+   `@NgModule`;
+2. an installed library's `.d.ts`: the `ɵɵComponentDeclaration`,
+   `ɵɵDirectiveDeclaration` and `ɵɵNgModuleDeclaration` types the
+   compiler writes there, read the way the compiler reads them, the same
+   in Angular 19 to 22;
+3. when neither can tell whose an input is, the tag: a contract that
+   matches it makes the input that component's.
+
+So the verdict follows the versions installed: an input a library
+renames or moves to another component is judged by where the installed
+`.d.ts` declares it. Without `node_modules`, as in a CI step that skips
+the install, the second source is not there and the third answers. Only
+the `.d.ts` a template's component reaches through its imports are
+read, once per version of each package. One that has declarations none
+of which can be read, as a later Angular may write them, is said once
+per package on stderr:
+
+```text
+[@shadcn/lint] The Angular declarations in broken-kit 99.0.0 cannot be
+read: index.d.ts has 2, none of them in the form Angular 19 to 22 write.
+Until they can be, shadcn/no-restyle judges a *Class input on an
+element by the contract of its tag, as it does without the package
+installed.
+```
+
+Whether a library's class styles its element is read from its
+published JavaScript, the partial declaration Angular's linker reads
+(`ɵɵngDeclareDirective`, `ɵɵngDeclareComponent`): the module the
+package's `exports`, or `module`, gives for the entry point the class
+was imported from, and the modules it re-exports from. A declaration
+the linker of Angular 22 would refuse, one whose `minVersion` is newer,
+is not read. These are read only for an element a contract judges, once
+per version of each package, and one with declarations none of which
+can be read is said once per package:
+
+```text
+[@shadcn/lint] The Angular declarations in torn-kit 1.0.0 cannot be
+read: fesm2022/torn-kit.mjs has 1, none of them in the form the linker
+of Angular 22 reads. Until they can be, shadcn/no-restyle takes its
+directives for ones that may style their element, as it does without
+the package's JavaScript.
+```
+
+A component an NgModule declares, `standalone: false`, can use what
+that module declares and what its `imports` export, and through those,
+what the modules they export export in turn. The module is looked for in
+the component's directory and the ones above it, up to the project's
+root, the directory with `package.json`, `project.json` or
+`angular.json`: `input.module.ts` beside `check/check.component.ts`. A
+module declared anywhere else is not found: the messages on the
+component's elements list no variants, and an input on them is taken
+for the component its tag names.
 
 ## What it cannot see
 

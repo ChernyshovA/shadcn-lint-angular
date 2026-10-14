@@ -535,3 +535,130 @@ describe("components.json with a bare ui alias", () => {
     expect(uiDirectory(projectFor(page)!)).toBe(path.join(root, "lib/ui"))
   })
 })
+
+// spartan's CLI writes a components.json of its own schema, with no
+// aliases (libs/cli/src/utils/config.ts): componentsPath is the directory
+// it generates components into, importAlias the prefix they are imported
+// by, each with the CLI's default when left out.
+describe("a spartan components.json", () => {
+  let root: string
+  function write(name: string, source: string) {
+    const file = path.join(root, name)
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, source)
+    return file
+  }
+  const config = (json: object) =>
+    write("components.json", JSON.stringify(json))
+  const page = () => path.join(root, "src/app/app.component.html")
+  const warnings: string[] = []
+  beforeEach(() => {
+    resetFsMemo()
+    warnings.length = 0
+    setWarningSink((message) => warnings.push(message))
+    root = fs.realpathSync.native(
+      fs.mkdtempSync(path.join(os.tmpdir(), "shadcn-lint-spartan-"))
+    )
+    write("package.json", "{}")
+  })
+  afterEach(() => {
+    resetWarnings()
+    setWarningSink((message) => console.warn(message))
+    fs.rmSync(root, { recursive: true, force: true })
+  })
+
+  test("reads componentsPath as the ui directory, and the theme as before", () => {
+    config({
+      style: "vega",
+      tailwind: { css: "src/styles.css" },
+      componentsPath: "libs/kit",
+      importAlias: "@acme/kit",
+    })
+    const button = write("libs/kit/button/src/lib/kit-button.ts", "")
+    const project = projectFor(page())!
+    expect(project.spartan).toEqual({
+      componentsPath: "libs/kit",
+      importAlias: "@acme/kit",
+    })
+    expect(project.cssFile).toBe(path.join(root, "src/styles.css"))
+    expect(uiDirectory(project)).toBe(path.join(root, "libs/kit"))
+    expect(componentsFor(page()).owns(button)).toBe(true)
+    expect(warnings).toEqual([])
+  })
+
+  test.each([
+    ["Nx's fields alone", { buildable: true, generateAs: "library" }],
+    ["importAlias alone", { importAlias: "@acme/kit" }],
+  ])("takes the CLI's defaults for what it leaves out: %s", (_, json) => {
+    config(json)
+    write("libs/ui/button/src/index.ts", "")
+    const project = projectFor(page())!
+    expect(project.spartan).toEqual({
+      componentsPath: "libs/ui",
+      importAlias:
+        "importAlias" in json ? json.importAlias : "@spartan-ng/helm",
+    })
+    expect(uiDirectory(project)).toBe(path.join(root, "libs/ui"))
+    expect(warnings).toEqual([])
+  })
+
+  test("a componentsPath that is no directory warns once, naming it", () => {
+    config({ componentsPath: "libs/ui" })
+    const project = projectFor(page())!
+    expect(uiDirectory(project)).toBeNull()
+    uiDirectory(project)
+    expect(warnings).toEqual([
+      `[@shadcn/lint] The componentsPath "libs/ui" in ${path.join(root, "components.json")} is not a directory, so design-system components imported from "@spartan-ng/helm" are not recognized in this project. Fix componentsPath, or set componentImports.`,
+    ])
+  })
+
+  test("a field that is no string is ignored with a warning", () => {
+    config({ componentsPath: 1, importAlias: "@acme/kit" })
+    write("libs/ui/button/src/index.ts", "")
+    const project = projectFor(page())!
+    expect(project.spartan?.componentsPath).toBe("libs/ui")
+    expect(uiDirectory(project)).toBe(path.join(root, "libs/ui"))
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain("componentsPath in")
+  })
+
+  // shadcn's, shadcn-vue's and shadcn-svelte's schemas have aliases and
+  // none of spartan's fields.
+  test("with aliases, spartan's fields are not read", () => {
+    config({ aliases: { ui: "@/components/ui" }, componentsPath: "libs/ui" })
+    write("libs/ui/button/src/index.ts", "")
+    const project = projectFor(page())!
+    expect(project.spartan).toBeUndefined()
+    expect(uiDirectory(project)).toBeNull()
+    expect(warnings.some((w) => w.includes('ui alias "@/components/ui"'))).toBe(
+      true
+    )
+  })
+
+  test("without aliases or any field of spartan's, the default alias as before", () => {
+    config({ tailwind: { css: "src/styles.css" } })
+    write("libs/ui/button/src/index.ts", "")
+    const project = projectFor(page())!
+    expect(project.spartan).toBeUndefined()
+    expect(uiDirectory(project)).toBeNull()
+    expect(warnings.some((w) => w.includes('ui alias "@/components/ui"'))).toBe(
+      true
+    )
+  })
+})
+
+describe("the components.json of shadcn, shadcn-vue and shadcn-svelte", () => {
+  const FIXTURE_DIR = path.dirname(PROJECT)
+  test.each([
+    ["project", "app/page.tsx", "components/ui"],
+    ["vue-project", "src/App.vue", "src/components/ui"],
+    ["svelte-project", "src/routes/+page.svelte", "src/lib/components/ui"],
+  ])("%s reads its aliases, as upstream does", (fixture, file, ui) => {
+    const dir = path.join(FIXTURE_DIR, fixture)
+    const project = projectFor(path.join(dir, file))!
+    expect(project.spartan).toBeUndefined()
+    expect(uiDirectory(project)).toBe(
+      fs.realpathSync.native(path.join(dir, ui))
+    )
+  })
+})

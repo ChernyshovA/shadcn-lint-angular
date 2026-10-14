@@ -195,6 +195,23 @@ describe("variants from props", () => {
     expect(variantNamesFor(file, "Label")).toBeNull()
   })
 
+  // A class is a scope as a function is, for an Angular directive's cva
+  // and so for a React class component's.
+  test("a cva a class component uses stands in, whatever its name", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "shadcn-lint-variants-"))
+    const file = path.join(dir, "fancy.tsx")
+    fs.writeFileSync(
+      file,
+      `const styles = cva("", { variants: { variant: { solid: "", ghost: "" } } })
+       export class Fancy extends React.Component<{ variant?: "solid" | "ghost" }> {
+         render() { return <span className={styles({ variant: this.props.variant })} /> }
+       }
+       export class Plain extends React.Component { render() { return <span /> } }`
+    )
+    expect(variantNamesFor(file, "Fancy")).toEqual(["solid", "ghost"])
+    expect(variantNamesFor(file, "Plain")).toBeNull()
+  })
+
   test("variantNamesFor reads an alias and a lookup object from the file", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "shadcn-lint-variants-"))
     const file = path.join(dir, "button.tsx")

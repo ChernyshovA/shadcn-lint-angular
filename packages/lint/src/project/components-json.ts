@@ -4,7 +4,7 @@
 
 import * as path from "node:path"
 
-import { dirOf, findUp, isDirectory, memoize, mtimeOf } from "./fs"
+import { dirOf, findUp, isDirectory, memoize, mtimeOf, realpath } from "./fs"
 import { packageRoot, readJsonc, resolveDirectory } from "./resolve"
 import { warnOnce } from "./warn"
 
@@ -14,8 +14,14 @@ export type Project = {
   // Owns tsconfig paths and package imports.
   root: string
   aliases: Record<string, string>
+  // A components.json spartan's CLI wrote, which has no aliases.
+  spartan?: Spartan
   cssFile: string | null
 }
+
+// spartan's CLI schema (libs/cli/src/utils/config.ts): the directory it
+// generates components into, and the prefix they are imported by.
+export type Spartan = { componentsPath: string; importAlias: string }
 
 const cache = new Map<string, { mtimeMs: number; project: Project | null }>()
 
@@ -30,13 +36,49 @@ function readProject(file: string): Project | null {
     return null
   }
   const css = json.tailwind?.css
+  const spartan = json.aliases == null ? readSpartan(file, json) : null
   return {
     dir,
     file,
     root: packageRoot(file) ?? dir,
     aliases: readAliases(file, json.aliases),
+    ...(spartan && { spartan }),
     cssFile: typeof css === "string" && css ? path.resolve(dir, css) : null,
   }
+}
+
+// The fields of spartan's schema that the schemas of shadcn, shadcn-vue
+// and shadcn-svelte do not have. Theirs have aliases, which shadcn's
+// requires and spartan's CLI never writes, so a file with aliases is read
+// as upstream reads it.
+const SPARTAN_KEYS = [
+  "componentsPath",
+  "importAlias",
+  "buildable",
+  "generateAs",
+]
+
+const SPARTAN_DEFAULTS: Spartan = {
+  componentsPath: "libs/ui",
+  importAlias: "@spartan-ng/helm",
+}
+
+function readSpartan(file: string, json: any): Spartan | null {
+  if (!SPARTAN_KEYS.some((key) => key in json)) return null
+  const out = { ...SPARTAN_DEFAULTS }
+  for (const key of Object.keys(out) as (keyof Spartan)[]) {
+    const value = json[key]
+    if (value === undefined) continue
+    if (typeof value === "string" && value) {
+      out[key] = value
+      continue
+    }
+    warnOnce(
+      `${key}:${file}`,
+      `${key} in ${file} must be a non-empty string; it is ignored and spartan's default "${out[key]}" is read instead.`
+    )
+  }
+  return out
 }
 
 // A `"ui": true` must not crash every rule: report it once and read the
@@ -111,6 +153,16 @@ export function resolveAlias(project: Project, alias: string) {
 // nothing is reported once: silently recognizing no components is the
 // failure mode an enforcement tool must never have.
 export function uiDirectory(project: Project) {
+  if (project.file && project.spartan) {
+    const { componentsPath, importAlias } = project.spartan
+    const dir = path.resolve(project.dir, componentsPath)
+    if (isDirectory(dir)) return realpath(dir)
+    warnOnce(
+      `ui:${project.file}`,
+      `The componentsPath "${componentsPath}" in ${project.file} is not a directory, so design-system components imported from "${importAlias}" are not recognized in this project. Fix componentsPath, or set componentImports.`
+    )
+    return null
+  }
   if (project.file) {
     const alias =
       project.aliases.ui ?? `${project.aliases.components ?? "@/components"}/ui`

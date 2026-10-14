@@ -66,4 +66,8 @@ export type TemplateReader = {
   // A template identifier's variable when the parser's scopes stop at
   // the script.
   variableOf?: (node: any, context: any) => any
+  // Markup with no imports to resolve a tag through, where a contract's
+  // pattern names an element by its tag and its attributes instead: the
+  // names, null for no element.
+  contractNames?: (element: any) => string[] | null
 }

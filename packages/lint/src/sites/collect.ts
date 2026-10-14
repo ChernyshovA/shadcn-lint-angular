@@ -46,6 +46,8 @@ export type ClassSite = {
   wrapper: string | null
   attribute: string | null
   node: any
+  // The element the classes are written on; null for a helper call.
+  element: any
   // The nearest enclosing element that passes `accepts`, and whether it
   // is the direct parent: where a spacing finding sends the class.
   enclosingContainer: (
@@ -929,7 +931,11 @@ export function collectClassStrings(
           if (valueHelpers.has(callee)) {
             for (const arg of node.arguments) visitVariantConfig(arg)
           } else {
-            for (const arg of node.arguments) {
+            // spartan's `classes(computed, options)`: the options name the
+            // element and injector, not classes.
+            const args =
+              callee === "classes" ? node.arguments.slice(0, 1) : node.arguments
+            for (const arg of args) {
               // spartan's `classes(() => "p-4")` merges what it returns.
               if (arg?.type === "ArrowFunctionExpression") {
                 for (const value of returnedValues(arg)) visit(value, false)
@@ -1305,6 +1311,7 @@ export function classSiteVisitors(
       wrapper: resolved?.wrapper ?? null,
       attribute,
       node,
+      element,
       enclosingContainer: (accepts) =>
         element ? enclosingOf(element, accepts) : null,
       closedParent: (accepts) =>
@@ -1439,6 +1446,7 @@ export function classSiteVisitors(
               wrapper: null,
               attribute: null,
               node,
+              element: null,
               enclosingContainer: () => null,
               closedParent: () => null,
             })

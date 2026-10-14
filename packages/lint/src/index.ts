@@ -74,6 +74,7 @@ declare module "@eslint/core" {
                   >
                 >
           }[]
+          multipleContracts?: "any" | "all"
         },
       ]
     >

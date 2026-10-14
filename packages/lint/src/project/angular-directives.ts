@@ -1,0 +1,1268 @@
+// Which directives an Angular template element is, the way the compiler
+// finds them. The template's component brings its scope: a standalone
+// component's `imports`, or for one an NgModule declares, that module's
+// declarations and what its `imports` export. Each class in it is read
+// by the first source that knows it, as ngtsc's CompoundMetadataReader
+// asks its readers in turn (compiler-cli, src/ngtsc/metadata): a class
+// in the project from its @Directive, @Component or @NgModule, a class
+// of an installed library from the declaration its .d.ts carries (see
+// angular-dts.ts), and what its host puts on the element from the one
+// its published JavaScript carries (angular-partial.ts). The compiler's
+// own SelectorMatcher then says which match the element, the way it
+// matches them in a build.
+//
+// A matched directive gives a no-restyle message its variants, from the
+// cva beside it as a .tsx component's does, and says whose an input such
+// as styleClass is: the directive that declares it.
+//
+// What this cannot follow leaves the answer unknown, never wrong: an
+// import this cannot resolve, a library that is not installed, a module
+// declared outside the component's directory and those above it.
+
+import * as fs from "node:fs"
+import * as path from "node:path"
+
+import { dottedName } from "../sites/collect"
+import type { ElementSelector } from "../sites/readers/angular"
+import { angularCompiler } from "../sites/readers/angular-compiler"
+import {
+  dtsExport,
+  dtsRef,
+  resolveDts,
+  type DtsClass,
+  type DtsValue,
+} from "./angular-dts"
+import { compiledStyles } from "./angular-partial"
+import { templateOwners, type ComponentMeta } from "./angular-styles"
+import { walk } from "./ast"
+import { isFile, memoize, mtimeOf, NODE_MODULES, realpath } from "./fs"
+import { definingExportOf } from "./modules"
+import { parseSource } from "./parser"
+import { packageRoot, resolveFile } from "./resolve"
+
+// A directive class and the file that declares it.
+export type DirectiveClass = {
+  file: string
+  name: string
+  // Whether its file declares no other directive, so that any cva in it
+  // is its own, as a single-file component's is.
+  sole: boolean
+}
+
+type Known = DirectiveClass & {
+  // What its hostDirectives put on the element too, one level down.
+  hosted: DirectiveClass[]
+  // Read from a library's .d.ts: it has no cva this reads, and no
+  // message sends anyone into node_modules.
+  compiled: boolean
+}
+
+export type DirectiveRef = Known & {
+  // Whether it styles the element, or a directive it hosts does: see
+  // stylesHost, and for a library's, the host its published JavaScript
+  // declares; or takes the element's class into an input, see
+  // takesClass. Null when that cannot be read.
+  styles: boolean | null
+}
+
+// A directive or component in a template's scope.
+type Directive = Known & {
+  selector: string
+  component: boolean
+  // The public names of the inputs it takes: its own, those of the class
+  // it extends and those its hostDirectives expose on it.
+  inputs: Set<string>
+  // Whether every input it takes is among them.
+  complete: boolean
+  // What it was read from: whether it styles its element is read from
+  // there only for an element a contract judges.
+  found: Extract<Found, { kind: "source" | "class" }>
+}
+
+type ParsedModule = {
+  // Local name -> where it is imported from; "*" for a namespace.
+  imports: Map<string, { spec: string; name: string }>
+  // Top-level classes, and constants by their value.
+  declarations: Map<string, any>
+}
+
+const parsed = new Map<
+  string,
+  { mtimeMs: number; module: ParsedModule | null }
+>()
+
+function moduleOf(file: string) {
+  const mtimeMs = mtimeOf(file)
+  if (mtimeMs === null) return null
+  const cached = parsed.get(file)
+  if (cached && cached.mtimeMs === mtimeMs) return cached.module
+  let module: ParsedModule | null = null
+  try {
+    module = declarationsOf(parseSource(fs.readFileSync(file, "utf8"), file))
+  } catch {
+    // Unreadable: nothing is declared.
+  }
+  parsed.set(file, { mtimeMs, module })
+  return module
+}
+
+function nameOf(node: any): string | null {
+  if (node?.type === "Identifier") return node.name
+  if (node?.type === "Literal" && typeof node.value === "string") {
+    return node.value
+  }
+  return null
+}
+
+function declarationsOf(program: any): ParsedModule {
+  const imports = new Map<string, { spec: string; name: string }>()
+  const declarations = new Map<string, any>()
+  for (const statement of program?.body ?? []) {
+    if (statement.type === "ImportDeclaration") {
+      if (statement.importKind === "type") continue
+      const spec = statement.source?.value
+      if (typeof spec !== "string") continue
+      for (const specifier of statement.specifiers ?? []) {
+        const local = specifier.local?.name
+        if (!local || specifier.importKind === "type") continue
+        if (specifier.type === "ImportSpecifier") {
+          imports.set(local, {
+            spec,
+            name: nameOf(specifier.imported) ?? local,
+          })
+        } else if (specifier.type === "ImportDefaultSpecifier") {
+          imports.set(local, { spec, name: "default" })
+        } else if (specifier.type === "ImportNamespaceSpecifier") {
+          imports.set(local, { spec, name: "*" })
+        }
+      }
+      continue
+    }
+    const node =
+      statement.type === "ExportNamedDeclaration" ||
+      statement.type === "ExportDefaultDeclaration"
+        ? statement.declaration
+        : statement
+    if (node?.type === "ClassDeclaration" && node.id?.name) {
+      declarations.set(node.id.name, node)
+    } else if (node?.type === "VariableDeclaration") {
+      for (const declarator of node.declarations ?? []) {
+        if (declarator.id?.type === "Identifier" && declarator.init) {
+          declarations.set(declarator.id.name, declarator.init)
+        }
+      }
+    }
+  }
+  return { imports, declarations }
+}
+
+// A value past `as const`, `satisfies` and parentheses.
+function unwrapped(node: any) {
+  let value = node
+  while (
+    value?.type === "TSAsExpression" ||
+    value?.type === "TSSatisfiesExpression" ||
+    value?.type === "TSTypeAssertion" ||
+    value?.type === "ParenthesizedExpression"
+  ) {
+    value = value.expression
+  }
+  return value
+}
+
+// `[A, B] as const` and the like, as its elements.
+function elementsOf(node: any): any[] | null {
+  const value = unwrapped(node)
+  return value?.type === "ArrayExpression" ? value.elements : null
+}
+
+// The entries of an `imports`, `exports` or `declarations` option: the
+// elements of the array it writes, or the constant it names, which an
+// entry is followed to. None when the option is not given.
+function listed(value: any): any[] {
+  return value ? (elementsOf(value) ?? [value]) : []
+}
+
+// A property of an object literal, by its key.
+function propertyOf(object: any, key: string) {
+  if (object?.type !== "ObjectExpression") return null
+  for (const property of object.properties ?? []) {
+    if (property.type === "Property" && nameOf(property.key) === key) {
+      return property.value
+    }
+  }
+  return null
+}
+
+// Whether an object literal writes out every key it has: a spread or a
+// computed key can carry any of them.
+function whole(object: any) {
+  return (
+    object?.type === "ObjectExpression" &&
+    object.properties.every(
+      (property: any) => property.type === "Property" && !property.computed
+    )
+  )
+}
+
+// The decorator of a class among `names`, with its options, or null.
+// `whole` when every option is written out: none are given, or an
+// object literal whose keys can all be read.
+function decoratorOf(node: any, names: readonly string[]) {
+  for (const decorator of node?.decorators ?? []) {
+    const call = decorator.expression
+    if (call?.type !== "CallExpression") continue
+    const callee = nameOf(call.callee)
+    if (callee && names.includes(callee)) {
+      const options = call.arguments?.[0]
+      return {
+        name: callee,
+        options: options ?? {},
+        whole: options === undefined || whole(options),
+      }
+    }
+  }
+  return null
+}
+
+const DIRECTIVE = ["Directive", "Component"]
+const NG_MODULE = ["NgModule"]
+const PIPE = ["Pipe"]
+
+// The arguments of a class's @Directive or @Component, or null.
+function directiveOptions(node: any) {
+  return decoratorOf(node, DIRECTIVE)?.options ?? null
+}
+
+// A string written out, or built of the constants the file declares:
+// "kit-local", SELECTOR, `${PREFIX}-tpl`. Null for any other.
+function constantString(
+  node: any,
+  module: ParsedModule,
+  depth = 0
+): string | null {
+  const value = unwrapped(node)
+  if (value?.type === "Literal") {
+    return typeof value.value === "string" ? value.value : null
+  }
+  if (depth > MAX_DEPTH) return null
+  if (value?.type === "Identifier") {
+    const declared = module.declarations.get(value.name)
+    return declared ? constantString(declared, module, depth + 1) : null
+  }
+  if (value?.type !== "TemplateLiteral") return null
+  let out = ""
+  for (const [i, quasi] of value.quasis.entries()) {
+    if (typeof quasi.value?.cooked !== "string") return null
+    out += quasi.value.cooked
+    if (i === value.expressions.length) break
+    const part = constantString(value.expressions[i], module, depth + 1)
+    if (part === null) return null
+    out += part
+  }
+  return out
+}
+
+// The selector a class's @Directive or @Component gives: null for none,
+// which no element matches; undefined for one this cannot read.
+function selectorOf(node: any, module: ParsedModule) {
+  const decorator = decoratorOf(node, DIRECTIVE)
+  const value = propertyOf(decorator?.options, "selector")
+  if (!value) return decorator?.whole ? null : undefined
+  return constantString(value, module) ?? undefined
+}
+
+type Reading = {
+  out: Directive[]
+  seen: Set<string>
+  deps: Set<string>
+  // The class helpers a call to which builds the element's classes.
+  helpers: ReadonlySet<string>
+  // Whether every entry of the scope was followed to what it is.
+  complete: boolean
+}
+
+const CLASS_HOST_KEY = /^(?:class|\[class(?:\.[^\]]+)?\]|\[ngClass\])$/
+
+// A directive that styles its element: one that takes the element's own
+// class into its classes, as spartan's classes() does through
+// inject(new HostAttributeToken("class")), builds classes with a helper
+// mergeFunctions names, or binds the class itself in `host` or with
+// @HostBinding. A trigger beside it does none of these. Null when it
+// does none this can read, and names or binds what this cannot read:
+// `host: HOST`, `@HostBinding(CLASS)`. Calls count in its class body
+// alone: spartan's HlmTooltip calls hlm in its providers and at module
+// level for the tooltip it opens, not for its element.
+function stylesHost(node: any, helpers: ReadonlySet<string>) {
+  let styles = false
+  let unread = false
+  // A name a class, a token or a binding is given as a string.
+  const named = (argument: any, test: (name: string) => boolean) => {
+    const name = stringIn(argument)
+    if (name === null && argument) unread = true
+    return name !== null && test(name)
+  }
+  walk(node.body, (child) => {
+    if (styles) return
+    if (child.type === "CallExpression") {
+      const callee = dottedName(child.callee)
+      styles = callee === "classes" || (!!callee && helpers.has(callee))
+    } else if (
+      child.type === "NewExpression" &&
+      nameOf(child.callee) === "HostAttributeToken"
+    ) {
+      styles = named(child.arguments?.[0], (name) => name === "class")
+    } else if (child.type === "Decorator") {
+      const callee = child.expression?.callee
+      const name =
+        callee?.type === "MemberExpression"
+          ? nameOf(callee.property)
+          : nameOf(callee)
+      if (name === "HostBinding" || name === "Attribute") {
+        styles = named(child.expression.arguments?.[0], (bound) =>
+          /^class(?:\.|$)/.test(bound)
+        )
+      }
+    }
+  })
+  if (styles) return true
+  const decorator = decoratorOf(node, DIRECTIVE)
+  // A spread among its options can carry `host`.
+  if (decorator && !decorator.whole) return null
+  const host = propertyOf(decorator?.options, "host")
+  if (host) {
+    if (!whole(host)) return null
+    const keys = host.properties.map((property: any) => nameOf(property.key))
+    if (keys.some((key: string | null) => CLASS_HOST_KEY.test(key ?? ""))) {
+      return true
+    }
+  }
+  return unread ? null : false
+}
+
+// Three-valued or: true when one is, unknown when none is and one is
+// unknown.
+function either(values: (boolean | null)[]) {
+  if (values.includes(true)) return true
+  return values.includes(null) ? null : false
+}
+
+const MAX_DEPTH = 16
+
+// What a name a source file declares or imports stands for: one of its
+// classes or arrays, or what a library's .d.ts declares under it.
+type Found =
+  | {
+      kind: "source"
+      file: string
+      name: string
+      node: any
+      module: ParsedModule
+    }
+  | { kind: "array"; file: string; elements: any[] }
+  | DtsValue
+
+// A bare specifier an installed package answers, past tsconfig paths
+// that map it into the project.
+function installedSpec(spec: string, from: string) {
+  if (spec.startsWith(".") || path.isAbsolute(spec)) return false
+  const dir = path.dirname(from)
+  const resolved = resolveFile(spec, dir, packageRoot(from) ?? dir)
+  return !resolved || NODE_MODULES.test(resolved)
+}
+
+function lookup(
+  file: string,
+  name: string,
+  deps: Set<string>,
+  depth = 0
+): Found | null {
+  if (depth > MAX_DEPTH) return null
+  deps.add(file)
+  const module = moduleOf(file)
+  if (!module) return null
+  const declared = module.declarations.get(name)
+  if (declared) {
+    if (declared.type === "ClassDeclaration") {
+      return { kind: "source", file, name, node: declared, module }
+    }
+    const elements = elementsOf(declared)
+    return elements ? { kind: "array", file, elements } : null
+  }
+  const imported = module.imports.get(name)
+  // A namespace is no class or list.
+  if (!imported || imported.name === "*") return null
+  // A library compiled into node_modules declares no decorator to read;
+  // its .d.ts does.
+  if (installedSpec(imported.spec, file)) {
+    const target = resolveDts(imported.spec, file)
+    return target
+      ? dtsExport(target, imported.name, deps, {
+          spec: imported.spec,
+          from: file,
+          name: imported.name,
+        })
+      : null
+  }
+  const binding = definingExportOf(imported.spec, imported.name, file, deps)
+  if (!binding || NODE_MODULES.test(binding.file)) return null
+  return lookup(binding.file, binding.name, deps, depth + 1)
+}
+
+type Entry = { file: string; node: any }
+
+// The entries of a list a decorator writes, `inputs` or hostDirectives,
+// followed through the constants and spreads it is built of: `[A, ...B]`,
+// `C`. Null for a list built some other way.
+function entriesOf(
+  file: string,
+  node: any,
+  deps: Set<string>,
+  depth = 0
+): Entry[] | null {
+  if (depth > MAX_DEPTH) return null
+  const value = unwrapped(node?.type === "SpreadElement" ? node.argument : node)
+  let elements = elementsOf(value)
+  let at = file
+  if (!elements && value?.type === "Identifier") {
+    const found = lookup(file, value.name, deps)
+    if (found?.kind === "array") {
+      elements = found.elements
+      at = found.file
+    }
+  }
+  if (!elements) return null
+  const out: Entry[] = []
+  for (const element of elements) {
+    if (element?.type !== "SpreadElement") {
+      out.push({ file: at, node: element })
+      continue
+    }
+    const spread = entriesOf(at, element, deps, depth + 1)
+    if (!spread) return null
+    out.push(...spread)
+  }
+  return out
+}
+
+// `X.forRoot()` and the like: a call on what an entry names, which
+// gives a module only when X is one.
+function memberCall(node: any) {
+  const value = node?.type === "SpreadElement" ? node.argument : node
+  return (
+    value?.type === "CallExpression" &&
+    value.callee?.type === "MemberExpression"
+  )
+}
+
+// What a name in `imports`, `exports` or `declarations` is written as:
+// `X`, `...X`, `forwardRef(() => X)`, or `X.forRoot()`, which gives the
+// module X.
+function referenceIn(node: any): string | null {
+  let value = node?.type === "SpreadElement" ? node.argument : node
+  if (value?.type === "CallExpression") {
+    const callee = value.callee
+    if (nameOf(callee) === "forwardRef") {
+      const arrow = value.arguments?.[0]
+      value = arrow?.type === "ArrowFunctionExpression" ? arrow.body : null
+    } else if (
+      callee?.type === "MemberExpression" &&
+      callee.object?.type === "Identifier"
+    ) {
+      value = callee.object
+    }
+  }
+  return value?.type === "Identifier" ? value.name : null
+}
+
+// A string a decorator writes out.
+function stringIn(node: any): string | null {
+  return node?.type === "Literal" && typeof node.value === "string"
+    ? node.value
+    : null
+}
+
+// The public name an entry of `inputs` gives: "size", "size: btnSize"
+// or `{ name, alias }`. Null for one this cannot read.
+function inputNameOf(node: any): string | null {
+  const written = stringIn(node)
+  if (written !== null) {
+    const [name, alias] = written.split(":").map((part) => part.trim())
+    return alias || name || null
+  }
+  if (whole(node)) {
+    const alias = propertyOf(node, "alias")
+    return alias ? stringIn(alias) : stringIn(propertyOf(node, "name"))
+  }
+  return null
+}
+
+// Whether a callee names what @angular/core exports as `name`: `Input`
+// as the file imports it, or `core.Input` through a namespace.
+function fromCore(module: ParsedModule, callee: any, name: string) {
+  if (callee?.type === "Identifier") {
+    const imported = module.imports.get(callee.name)
+    return imported?.spec === "@angular/core" && imported.name === name
+  }
+  if (
+    callee?.type !== "MemberExpression" ||
+    callee.computed ||
+    callee.object?.type !== "Identifier" ||
+    nameOf(callee.property) !== name
+  ) {
+    return false
+  }
+  const imported = module.imports.get(callee.object.name)
+  return imported?.spec === "@angular/core" && imported.name === "*"
+}
+
+// The alias options give an input, the field's own name without one;
+// undefined for an alias, or a name, this cannot read.
+function aliasIn(options: any, key: string | null) {
+  if (options === undefined) return key ?? undefined
+  const written = stringIn(options)
+  if (written !== null) return written
+  if (!whole(options)) return undefined
+  const alias = propertyOf(options, "alias")
+  return alias ? (stringIn(alias) ?? undefined) : (key ?? undefined)
+}
+
+// The public name a field declares as an input: `@Input()`,
+// `@Input("alias")` or `@Input({ alias })`, or a signal input or model,
+// `input()`, `input.required()`, `model()`, with `{ alias }`. Undefined
+// for an input whose name this cannot read.
+function fieldInputOf(
+  member: any,
+  module: ParsedModule
+): string | null | undefined {
+  // `[KEY] = input()`: an input, under a name not read.
+  const key = member?.computed ? null : nameOf(member?.key)
+  for (const decorator of member?.decorators ?? []) {
+    const call = decorator.expression
+    if (
+      call?.type !== "CallExpression" ||
+      !fromCore(module, call.callee, "Input")
+    ) {
+      continue
+    }
+    return aliasIn(call.arguments?.[0], key)
+  }
+  const value = member?.value
+  if (value?.type !== "CallExpression") return null
+  const callee = value.callee
+  const required =
+    callee?.type === "MemberExpression" &&
+    !callee.computed &&
+    nameOf(callee.property) === "required"
+  const base = required ? callee.object : callee
+  const kind = ["input", "model"].find((name) => fromCore(module, base, name))
+  if (!kind) return null
+  const options = value.arguments?.[required ? 0 : 1]
+  // input(initial, { transform }) takes its own name.
+  return options?.type === "ObjectExpression" || options === undefined
+    ? aliasIn(options, key)
+    : undefined
+}
+
+type Inputs = { names: Set<string>; complete: boolean }
+
+// A source class's inputs, as ngtsc reads them: its decorator's `inputs`,
+// its fields, what its hostDirectives expose, and the class it extends.
+function sourceInputs(
+  found: Extract<Found, { kind: "source" }>,
+  deps: Set<string>,
+  depth: number
+): Inputs {
+  const names = new Set<string>()
+  const decorator = decoratorOf(found.node, DIRECTIVE)
+  // A spread among its options can carry inputs.
+  let complete = depth <= MAX_DEPTH && decorator?.whole !== false
+  const options = decorator?.options
+  const add = (list: any, file: string) => {
+    const entries = entriesOf(file, list, deps)
+    if (!entries) complete = false
+    for (const entry of entries ?? []) {
+      const name = inputNameOf(entry.node)
+      if (name) names.add(name)
+      else complete = false
+    }
+  }
+  const inputs = propertyOf(options, "inputs")
+  if (inputs) add(inputs, found.file)
+  const hosts = propertyOf(options, "hostDirectives")
+  const entries = hosts ? entriesOf(found.file, hosts, deps) : []
+  if (!entries) complete = false
+  for (const entry of entries ?? []) {
+    // `{ directive, inputs }` exposes inputs under the host's names; a
+    // class alone exposes none, anything else may.
+    if (entry.node?.type === "ObjectExpression") {
+      if (!whole(entry.node)) complete = false
+      const exposed = propertyOf(entry.node, "inputs")
+      if (exposed) add(exposed, entry.file)
+      continue
+    }
+    const name = memberCall(entry.node) ? null : referenceIn(entry.node)
+    const kind = name ? lookup(entry.file, name, deps)?.kind : null
+    if (kind !== "source" && kind !== "class") complete = false
+  }
+  for (const member of found.node.body?.body ?? []) {
+    const name = fieldInputOf(member, found.module)
+    if (name) names.add(name)
+    else if (name === undefined) complete = false
+  }
+  const base = found.node.superClass
+  if (base && complete) {
+    const inherited =
+      base.type === "Identifier"
+        ? classInputs(lookup(found.file, base.name, deps), deps, depth + 1)
+        : null
+    if (inherited) for (const name of inherited.names) names.add(name)
+    complete = !!inherited?.complete
+  }
+  return { names, complete }
+}
+
+// A library class's inputs: those its declaration lists, and those of
+// the class it extends, as ngtsc flattens them.
+function dtsInputs(
+  file: string,
+  cls: DtsClass,
+  deps: Set<string>,
+  depth: number
+): Inputs {
+  const names = new Set(cls.directive?.inputs ?? [])
+  let complete = depth <= MAX_DEPTH && cls.base !== "dynamic"
+  if (cls.base && cls.base !== "dynamic" && complete) {
+    const inherited = classInputs(dtsRef(file, cls.base, deps), deps, depth + 1)
+    if (inherited) for (const name of inherited.names) names.add(name)
+    complete = !!inherited?.complete
+  }
+  return { names, complete }
+}
+
+function classInputs(
+  found: Found | null,
+  deps: Set<string>,
+  depth: number
+): Inputs | null {
+  if (found?.kind === "source") return sourceInputs(found, deps, depth)
+  if (found?.kind === "class")
+    return dtsInputs(found.file, found.cls, deps, depth)
+  return null
+}
+
+// The directives a class's hostDirectives apply to its element too:
+// `[HlmButton]` or `[{ directive: HlmButton, inputs: ["variant"] }]`,
+// those of the project as their sources declare them, those of a library
+// as its .d.ts does. `read` is false when one is neither: one this cannot
+// follow.
+function hostsOf(file: string, node: any, deps: Set<string>) {
+  const hosts: Extract<Found, { kind: "source" }>[] = []
+  const compiled: Extract<Found, { kind: "class" }>[] = []
+  const decorator = decoratorOf(node, DIRECTIVE)
+  let read = decorator?.whole !== false
+  const list = propertyOf(decorator?.options, "hostDirectives")
+  const entries = list ? entriesOf(file, list, deps) : []
+  if (!entries) read = false
+  for (const entry of entries ?? []) {
+    const ref =
+      entry.node?.type === "ObjectExpression"
+        ? propertyOf(entry.node, "directive")
+        : entry.node
+    const name = memberCall(ref) ? null : referenceIn(ref)
+    const found = name ? lookup(entry.file, name, deps) : null
+    // A host directive needs no selector.
+    if (found?.kind === "source" && directiveOptions(found.node)) {
+      hosts.push(found)
+    } else if (found?.kind === "class" && found.cls.directive) {
+      compiled.push(found)
+    } else read = false
+  }
+  return { hosts, compiled, read }
+}
+
+// Whether a library's directive styles its element, as the declaration
+// in its published JavaScript says. Unknown without the entry point it
+// was reached through.
+function compiledStylesOf(
+  found: Extract<Found, { kind: "class" }>,
+  deps: Set<string>
+) {
+  const { owner, cls } = found
+  if (!owner || !cls.directive) return null
+  return compiledStyles(owner, found.name, cls.directive.selector, deps)
+}
+
+// Whether a directive styles its element, itself or through the
+// directives it hosts and they host in turn. Unknown when one of them
+// cannot be read.
+function stylesOf(
+  found: Extract<Found, { kind: "source" }>,
+  deps: Set<string>,
+  helpers: ReadonlySet<string>,
+  depth = 0
+): boolean | null {
+  const own = stylesHost(found.node, helpers)
+  if (own || depth >= MAX_DEPTH) return own || null
+  const { hosts, compiled, read } = hostsOf(found.file, found.node, deps)
+  return either([
+    own,
+    read ? false : null,
+    ...hosts.map((host) => stylesOf(host, deps, helpers, depth + 1)),
+    ...compiled.map((host) => compiledStylesOf(host, deps)),
+  ])
+}
+
+function directivesDeclaredIn(module: ParsedModule) {
+  let count = 0
+  for (const node of module.declarations.values()) {
+    if (node.type === "ClassDeclaration" && directiveOptions(node)) count++
+  }
+  return count
+}
+
+function signatureOf(deps: Set<string>) {
+  let signature = ""
+  for (const dep of deps) signature += `${dep}:${mtimeOf(dep) ?? "missing"}|`
+  return signature
+}
+
+// Read once while the files it was read from stand, as every template
+// whose component can use the class asks the same of it.
+function derived<T>(key: string, compute: (deps: Set<string>) => T) {
+  return memoize(
+    key,
+    () => {
+      const deps = new Set<string>()
+      const value = compute(deps)
+      return { value, deps, signature: signatureOf(deps) }
+    },
+    (hit) => hit.signature !== signatureOf(hit.deps)
+  )
+}
+
+// A directive or component as a scope holds it; null for one no element
+// matches, with no selector, and undefined for one whose selector this
+// cannot read, which may match any.
+function directiveIn(
+  found: Extract<Found, { kind: "source" | "class" }>,
+  helpers: ReadonlySet<string>
+) {
+  const key = `angular:directive:${found.file}\u0000${found.name}`
+  if (found.kind === "class") {
+    return derived(key, (deps): Directive | null => {
+      const { directive } = found.cls
+      if (!directive?.selector) return null
+      deps.add(found.file)
+      const inputs = dtsInputs(found.file, found.cls, deps, 0)
+      return {
+        file: found.file,
+        name: found.name,
+        selector: directive.selector,
+        component: directive.component,
+        inputs: inputs.names,
+        complete: inputs.complete,
+        sole: false,
+        hosted: [],
+        compiled: true,
+        found,
+      }
+    })
+  }
+  return derived(
+    `${key}\u0000${[...helpers].join(",")}`,
+    (deps): Directive | null | undefined => {
+      const { file, node, module } = found
+      deps.add(file)
+      const selector = selectorOf(node, module)
+      if (selector === undefined) return undefined
+      if (!selector) return null
+      // What its variants may come from, one level down.
+      const { hosts } = hostsOf(file, node, deps)
+      const inputs = sourceInputs(found, deps, 0)
+      return {
+        file,
+        name: found.name,
+        selector,
+        component: decoratorOf(node, DIRECTIVE)?.name === "Component",
+        inputs: inputs.names,
+        complete: inputs.complete,
+        sole: directivesDeclaredIn(module) === 1,
+        hosted: hosts.map((host) => ({
+          file: host.file,
+          name: host.name,
+          sole: directivesDeclaredIn(host.module) === 1,
+        })),
+        compiled: false,
+        found,
+      } satisfies Directive
+    }
+  )
+}
+
+// The modules whose exports are being read: a module that exports one
+// exporting it back ends there.
+const expanding = new Set<string>()
+
+// What a module exports, as the directives it brings into a scope:
+// those it exports, and what the modules it exports export in turn.
+function exportsOfModule(
+  found: Extract<Found, { kind: "source" | "class" }>,
+  helpers: ReadonlySet<string>
+) {
+  const key = `angular:exports:${found.file}\u0000${found.name}\u0000${[...helpers].join(",")}`
+  if (expanding.has(key)) return null
+  expanding.add(key)
+  try {
+    return derived(key, (deps) => {
+      const reading: Reading = {
+        out: [],
+        seen: new Set(),
+        deps,
+        helpers,
+        complete: true,
+      }
+      deps.add(found.file)
+      if (found.kind === "class") {
+        const module = found.cls.module!
+        if (!module.complete) reading.complete = false
+        for (const ref of module.exports) {
+          addFound(dtsRef(found.file, ref, deps, found.owner), reading, 1)
+        }
+      } else {
+        const decorator = decoratorOf(found.node, NG_MODULE)
+        if (!decorator?.whole) reading.complete = false
+        for (const element of listed(
+          propertyOf(decorator?.options, "exports")
+        )) {
+          addEntry(found.file, element, reading, 1)
+        }
+      }
+      return { directives: reading.out, complete: reading.complete }
+    })
+  } finally {
+    expanding.delete(key)
+  }
+}
+
+function addDirective(
+  read: { value: Directive | null | undefined; deps: Set<string> },
+  reading: Reading
+) {
+  for (const dep of read.deps) reading.deps.add(dep)
+  const directive = read.value
+  if (directive === undefined) reading.complete = false
+  if (!directive) return
+  const key = `${directive.file}\u0000${directive.name}`
+  if (reading.seen.has(key)) return
+  reading.seen.add(key)
+  reading.out.push(directive)
+}
+
+// What an entry of a scope brings into it: a directive or component, an
+// array of more entries, or what a module exports.
+function addFound(found: Found | null, reading: Reading, depth: number) {
+  if (!found || depth > MAX_DEPTH) {
+    reading.complete = false
+    return
+  }
+  if (found.kind === "array") {
+    for (const element of found.elements)
+      addEntry(found.file, element, reading, depth + 1)
+    return
+  }
+  if (found.kind === "tuple") {
+    for (const ref of found.refs)
+      addFound(
+        dtsRef(found.file, ref, reading.deps, found.owner),
+        reading,
+        depth + 1
+      )
+    return
+  }
+  const decorator =
+    found.kind === "source"
+      ? decoratorOf(found.node, [...DIRECTIVE, ...NG_MODULE, ...PIPE])
+      : null
+  // A pipe is matched by no element.
+  if (decorator?.name === "Pipe" || (found.kind === "class" && found.cls.pipe))
+    return
+  if (
+    decorator?.name === "NgModule" ||
+    (found.kind === "class" && found.cls.module)
+  ) {
+    const exported = exportsOfModule(found, reading.helpers)
+    // A module that exports one being read: the cycle is not followed,
+    // and what lies past it is not known.
+    if (!exported) {
+      reading.complete = false
+      return
+    }
+    for (const dep of exported.deps) reading.deps.add(dep)
+    if (!exported.value.complete) reading.complete = false
+    for (const directive of exported.value.directives) {
+      addDirective({ value: directive, deps: new Set() }, reading)
+    }
+    return
+  }
+  if (found.kind === "source" ? !decorator : !found.cls.directive) {
+    // A class neither decorated nor compiled: no one Angular knows.
+    reading.complete = false
+    return
+  }
+  addDirective(directiveIn(found, reading.helpers), reading)
+}
+
+function addEntry(file: string, node: any, reading: Reading, depth: number) {
+  const name = referenceIn(node)
+  const found = name ? lookup(file, name, reading.deps) : null
+  // `MAT.concat([…])` gives what this does not read.
+  if (memberCall(node) && !isModule(found)) {
+    reading.complete = false
+    return
+  }
+  addFound(found, reading, depth)
+}
+
+function isModule(found: Found | null) {
+  if (found?.kind === "source") return !!decoratorOf(found.node, NG_MODULE)
+  return found?.kind === "class" && !!found.cls.module
+}
+
+function readText(file: string) {
+  return memoize(`angular:read:${file}:${mtimeOf(file)}`, () => {
+    try {
+      return fs.readFileSync(file, "utf8")
+    } catch {
+      return null
+    }
+  })
+}
+
+function listing(dir: string): string[] {
+  try {
+    return memoize(`angular:dir:${dir}:${mtimeOf(dir)}`, () =>
+      fs.readdirSync(dir)
+    )
+  } catch {
+    return []
+  }
+}
+
+const NOT_SOURCE = /\.(?:d|spec|test)\.[cm]?ts$/
+const PROJECT_ROOT = ["package.json", "project.json", "angular.json"]
+
+// Whether a module's `declarations` name the class `name` of `file`.
+function declares(
+  moduleFile: string,
+  module: ParsedModule,
+  list: any,
+  file: string,
+  name: string,
+  deps: Set<string>,
+  depth = 0
+): boolean {
+  if (depth > MAX_DEPTH) return false
+  for (const element of listed(list)) {
+    const local = referenceIn(element)
+    if (!local) continue
+    const declared = module.declarations.get(local)
+    if (declared) {
+      if (declared.type === "ClassDeclaration") {
+        if (realpath(moduleFile) === file && local === name) return true
+      } else if (
+        declares(moduleFile, module, declared, file, name, deps, depth + 1)
+      ) {
+        return true
+      }
+      continue
+    }
+    const imported = module.imports.get(local)
+    if (
+      !imported ||
+      imported.name === "*" ||
+      installedSpec(imported.spec, moduleFile)
+    ) {
+      continue
+    }
+    const binding = definingExportOf(
+      imported.spec,
+      imported.name,
+      moduleFile,
+      deps
+    )
+    if (binding && binding.name === name && realpath(binding.file) === file)
+      return true
+  }
+  return false
+}
+
+// The NgModule that declares a component, looked for in the component's
+// directory and those above it, up to its project's root: where an app
+// keeps its modules, `input.module.ts` beside `check/check.component.ts`.
+function declaringModuleOf(file: string, name: string, deps: Set<string>) {
+  const own = realpath(file)
+  let dir = path.dirname(file)
+  for (let depth = 0; depth < 12; depth++) {
+    // A module added later changes its directory.
+    deps.add(dir)
+    for (const entry of listing(dir)) {
+      if (!/\.[cm]?ts$/.test(entry) || NOT_SOURCE.test(entry)) continue
+      const candidate = path.join(dir, entry)
+      const text = readText(candidate)
+      // Most files never mention the component; they are not parsed.
+      if (!text?.includes("NgModule") || !text.includes(name)) continue
+      deps.add(candidate)
+      const module = moduleOf(candidate)
+      for (const node of module?.declarations.values() ?? []) {
+        if (node.type !== "ClassDeclaration") continue
+        const decorator = decoratorOf(node, NG_MODULE)
+        if (
+          decorator &&
+          declares(
+            candidate,
+            module!,
+            propertyOf(decorator.options, "declarations"),
+            own,
+            name,
+            deps
+          )
+        ) {
+          return { file: candidate, decorator }
+        }
+      }
+    }
+    if (PROJECT_ROOT.some((marker) => isFile(path.join(dir, marker)))) break
+    const parent = path.dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return null
+}
+
+// What a component's template can use, as a matcher of their selectors,
+// built once while the files it was read from stand: a standalone
+// component's `imports`; for one an NgModule declares, the module's
+// declarations and what its `imports` export, one module up.
+function scopeOf(
+  file: string,
+  meta: ComponentMeta,
+  compiler: any,
+  helpers: ReadonlySet<string>
+) {
+  const scope = memoize(
+    `angular:directives:${file}\u0000${meta.name}\u0000${[...helpers].join(",")}`,
+    () => {
+      const reading: Reading = {
+        out: [],
+        seen: new Set(),
+        deps: new Set([file]),
+        helpers,
+        complete: true,
+      }
+      // A spread among the component's options can carry its imports.
+      if (meta.spreads) reading.complete = false
+      if (meta.imports) {
+        for (const node of listed(meta.imports)) {
+          addEntry(file, node, reading, 0)
+        }
+      } else {
+        const declaring = declaringModuleOf(file, meta.name, reading.deps)
+        if (declaring) {
+          const { options, whole } = declaring.decorator
+          if (!whole) reading.complete = false
+          for (const key of ["declarations", "imports"]) {
+            for (const node of listed(propertyOf(options, key))) {
+              addEntry(declaring.file, node, reading, 0)
+            }
+          }
+        } else if (meta.standalone !== true) {
+          // Standalone with nothing imported uses nothing; else the module
+          // that declares it was not found.
+          reading.complete = false
+        }
+      }
+      return {
+        directives: reading.out,
+        complete: reading.complete,
+        deps: reading.deps,
+        signature: signatureOf(reading.deps),
+        matcher: null as any,
+      }
+    },
+    (hit) => hit.signature !== signatureOf(hit.deps)
+  )
+  if (!scope.matcher) {
+    const matcher = new compiler.SelectorMatcher()
+    for (const directive of scope.directives) {
+      try {
+        matcher.addSelectables(
+          compiler.CssSelector.parse(directive.selector),
+          directive
+        )
+      } catch {
+        // A selector the compiler rejects matches nothing in a build.
+      }
+    }
+    scope.matcher = matcher
+  }
+  return scope
+}
+
+// Whether a selector names the element by this tag or attribute. A tag
+// stands for the selector that asks nothing more of the element:
+// `p-select[multiple]` is a directive added to the p-select component,
+// not the component.
+function selectorNames(selector: any, name: string) {
+  if (selector?.element === name) {
+    return !selector.attrs?.length && !selector.classNames?.length
+  }
+  const attrs: string[] = selector?.attrs ?? []
+  for (let i = 0; i < attrs.length; i += 2) {
+    if (attrs[i] === name) return true
+  }
+  return false
+}
+
+function targetOf(compiler: any, element: ElementSelector) {
+  const target = new compiler.CssSelector()
+  target.setElement(element.tag)
+  for (const [attribute, value] of element.attributes) {
+    target.addAttribute(attribute, value)
+    if (attribute.toLowerCase() === "class") {
+      for (const className of value.trim().split(/\s+/)) {
+        if (className) target.addClassName(className)
+      }
+    }
+  }
+  return target
+}
+
+// The directives of each component a template belongs to that match an
+// element, with the selector each matched it by. Null without the
+// compiler, or when no component is found for the template.
+function matchesOf(
+  template: string,
+  physical: string,
+  element: ElementSelector,
+  helpers: ReadonlySet<string>
+) {
+  const compiler = angularCompiler(physical)
+  if (!compiler?.SelectorMatcher || !compiler.CssSelector) return null
+  const owners = templateOwners(template, physical)
+  if (!owners.length) return null
+  const target = targetOf(compiler, element)
+  return owners.map(({ file, meta }) => {
+    const scope = scopeOf(file, meta, compiler, helpers)
+    const matched: { selector: any; directive: Directive }[] = []
+    scope.matcher.match(target, (selector: any, directive: Directive) => {
+      matched.push({ selector, directive })
+    })
+    return { matched, complete: scope.complete }
+  })
+}
+
+function knownOf(directive: Directive): Known {
+  const { file, name, sole, hosted, compiled } = directive
+  return { file, name, sole, hosted, compiled }
+}
+
+// Whether a directive styles its element, read once while the files it
+// was read from stand.
+function stylesIn(directive: Directive, helpers: ReadonlySet<string>) {
+  const { found } = directive
+  return derived(
+    `angular:styles:${found.file}\u0000${found.name}\u0000${[...helpers].join(",")}`,
+    (deps) => {
+      deps.add(found.file)
+      return found.kind === "source"
+        ? stylesOf(found, deps, helpers)
+        : compiledStylesOf(found, deps)
+    }
+  ).value
+}
+
+// Whether a directive takes its element's class into an input of its
+// own, one whose public name is `class`: Material's MatMenu into
+// panelClass, which puts it on the menu's panel, spartan's brain overlays
+// into className. Its own inputs, those of the class it extends and those
+// its hostDirectives expose count; one a directive it hosts keeps
+// unexposed never takes the element's class. Unknown when an input's
+// name cannot be read.
+function takesClass(directive: Directive) {
+  if (directive.inputs.has("class")) return true
+  return directive.complete ? false : null
+}
+
+// The directive an element's name stands for: among those in the
+// template's scope, the first whose selector matches the element and
+// names it. Null when none can be told.
+export function directiveOf(
+  template: string,
+  physical: string,
+  element: ElementSelector,
+  name: string,
+  helpers: ReadonlySet<string>
+): DirectiveRef | null {
+  for (const { matched } of matchesOf(template, physical, element, helpers) ??
+    []) {
+    const found = matched.find(({ selector }) => selectorNames(selector, name))
+    if (found) {
+      return {
+        ...knownOf(found.directive),
+        styles: either([
+          takesClass(found.directive),
+          stylesIn(found.directive, helpers),
+        ]),
+      }
+    }
+  }
+  return null
+}
+
+// A directive that takes an input on an element, and the names on the
+// element its selector matched it by: its tag for a component on its
+// tag, `mat-flat-button` for one on `button[mat-flat-button]`.
+export type InputOwner = Known & {
+  component: boolean
+  names: string[]
+}
+
+// Who takes an input on an element: each directive in the template's
+// scope that matches the element and declares the input, by its public
+// name. Empty when every directive the element matches was read whole
+// and none takes it, so the value lands nowhere; null when that cannot
+// be told.
+export function inputOwnersOf(
+  template: string,
+  physical: string,
+  element: ElementSelector,
+  input: string,
+  helpers: ReadonlySet<string>
+): InputOwner[] | null {
+  const scopes = matchesOf(template, physical, element, helpers)
+  if (!scopes) return null
+  const names = [element.tag, ...element.names]
+  let known = true
+  for (const { matched, complete } of scopes) {
+    const owners = new Map<Directive, Set<string>>()
+    for (const { selector, directive } of matched) {
+      if (!directive.inputs.has(input)) {
+        if (!directive.complete) known = false
+        continue
+      }
+      let by = owners.get(directive)
+      if (!by) owners.set(directive, (by = new Set()))
+      for (const name of names) if (selectorNames(selector, name)) by.add(name)
+    }
+    if (owners.size) {
+      return [...owners].map(([directive, by]) => ({
+        ...knownOf(directive),
+        component: directive.component,
+        names: [...by],
+      }))
+    }
+    if (!complete) known = false
+  }
+  return known ? [] : null
+}

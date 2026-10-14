@@ -146,7 +146,7 @@ describe("settings.shadcn as shared defaults", () => {
       `  return a ? "p-[3px]" : null`,
       `})`,
       `const c = other(() => "p-[8px]")`,
-      `export const A = () => <div className={classes(a, b, c)} />`,
+      `export const A = () => <div className={cn(a, b, c)} />`,
     ].join("\n")
     const found = (settings?: object) =>
       lint(
@@ -162,6 +162,27 @@ describe("settings.shadcn as shared defaults", () => {
       "p-[3px]",
     ])
     expect(found()).toEqual([])
+  })
+
+  // spartan's `classes(computed, options)` (libs/helm/utils/src/lib/hlm.ts):
+  // the options are the element and injector to apply the classes with.
+  test("spartan's classes() reads its first argument only, other helpers every one", () => {
+    const code = [
+      `import { classes, hlm } from "./hlm"`,
+      `const elementRef = {}`,
+      `classes(() => "flex-cols", { elementRef, injector: child })`,
+      `classes(computed, { elementRef })`,
+      `hlm("flex-rowz", { "grid-colz": on })`,
+    ].join("\n")
+    expect(
+      lint(
+        PROJECT,
+        PAGE,
+        code,
+        { "shadcn/no-unknown-classes": "error" },
+        { shadcn: { mergeFunctions: ["hlm", "classes"] } }
+      ).map((m) => m.message.split('"')[1])
+    ).toEqual(["flex-cols", "flex-rowz", "grid-colz"])
   })
 
   test("a rule's own option wins over the setting", () => {

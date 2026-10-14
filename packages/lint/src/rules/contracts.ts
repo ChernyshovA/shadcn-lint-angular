@@ -210,9 +210,9 @@ export function configErrorVisitors(context: any, error: unknown) {
   }
 }
 
-function compilePattern(pattern: string) {
+function compilePattern(pattern: string, source = pattern, flags?: string) {
   try {
-    return new RegExp(pattern)
+    return new RegExp(source, flags)
   } catch (error) {
     if (!(error instanceof SyntaxError)) {
       throw error
@@ -221,6 +221,24 @@ function compilePattern(pattern: string) {
       `Contract pattern "${pattern}" is not a valid regular expression.`
     )
   }
+}
+
+const SLASHED = /^\/(.+)\/([a-z]*)$/
+
+// An Angular template names an element by its tag and its attributes, as
+// written, and a pattern matches one of those names the way
+// angular-eslint's options do: `/^hlm/` is a regex, flags and all, and
+// any other pattern is the name itself.
+function compileNamePattern(pattern: string): (name: string) => boolean {
+  const slashed = SLASHED.exec(pattern)
+  if (!slashed) return (name) => name === pattern
+  // `g` and `y` would carry lastIndex from one name to the next.
+  const re = compilePattern(
+    pattern,
+    slashed[1],
+    slashed[2].replace(/[gy]/g, "")
+  )
+  return (name) => re.test(name)
 }
 
 // An entry that matches nothing enforces nothing, silently, which is the
@@ -381,8 +399,10 @@ function buildContracts(
     return verdict
   }
 
-  const decideUncached = (component: string | null, token: string): Verdict => {
-    const policy = component === null ? baseline : policyFor(component)
+  const decideUncached = (component: string | null, token: string) =>
+    verdictOf(component === null ? baseline : policyFor(component), token)
+
+  const verdictOf = (policy: Policy, token: string): Verdict => {
     const group = classifier.groupOf(token)
     // A marker (group/name, peer) is layout; a name the grammar cannot
     // classify is neither layout nor appearance.
@@ -403,6 +423,70 @@ function buildContracts(
       category,
       message,
     }
+  }
+
+  // How an Angular template's names match the patterns, built for the
+  // first template: anywhere else "/Button/q" is a regex over component
+  // names, valid and no error.
+  let nameMatchers: ((name: string) => boolean)[] | null = null
+  const compileNames = () =>
+    (nameMatchers ??= (inputs ?? []).map((c) => compileNamePattern(c.pattern)))
+
+  // An Angular element is each of its names a contract matches: the tag,
+  // an attribute, a binding. A name takes the last contract matching it,
+  // as a component name does, so an element with no such name is no
+  // component at all.
+  const identities = new Map<string, ElementIdentity[]>()
+  const identitiesOf = (names: readonly string[]) => {
+    const key = names.join("\u0000")
+    let found = identities.get(key)
+    if (found) return found
+    const matchers = compileNames()
+    found = []
+    for (const name of names) {
+      for (let i = matchers.length - 1; i >= 0; i--) {
+        if (matchers[i](name)) {
+          found.push({ name, contract: i })
+          break
+        }
+      }
+    }
+    if (identities.size > 5_000) identities.clear()
+    identities.set(key, found)
+    return found
+  }
+
+  const elementVerdicts = new Map<string, Verdict>()
+  const verdictAt = (contract: number, token: string) => {
+    const key = `${contract}\u0000${token}`
+    let verdict = elementVerdicts.get(key)
+    if (!verdict) {
+      if (elementVerdicts.size > 50_000) elementVerdicts.clear()
+      verdict = verdictOf(compiled[contract], token)
+      elementVerdicts.set(key, verdict)
+    }
+    return verdict
+  }
+
+  // What an element with several matched names takes: by default a class
+  // any of their contracts allows, with `every` only one all of them do.
+  // Null when it passes; else each name that refused it, with its
+  // verdict, in the element's order.
+  const decideElement = (
+    matched: readonly ElementIdentity[],
+    token: string,
+    every = false
+  ) => {
+    const refused: {
+      verdict: Exclude<Verdict, { kind: "ok" }>
+      name: string
+    }[] = []
+    for (const { name, contract } of matched) {
+      const verdict = verdictAt(contract, token)
+      if (verdict.kind !== "ok") refused.push({ verdict, name })
+      else if (!every) return null
+    }
+    return refused.length ? refused : null
   }
 
   // Components a contract lets this class onto, for a spacing message.
@@ -430,8 +514,11 @@ function buildContracts(
     return out
   }
 
-  return { decide, primitivesFor }
+  return { decide, primitivesFor, compileNames, identitiesOf, decideElement }
 }
+
+// A name on an Angular element and the contract it matched, by index.
+export type ElementIdentity = { name: string; contract: number }
 
 // The names ^Row$ or ^(Row|Stack|Box)$ spell out; else none.
 function literalNames(pattern: RegExp) {

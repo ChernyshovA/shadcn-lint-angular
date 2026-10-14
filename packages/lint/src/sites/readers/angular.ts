@@ -305,6 +305,91 @@ function tagOf(element: any) {
   return typeof name === "string" ? name.replace(/^:[^:]*:/, "") : ""
 }
 
+export type ElementSelector = {
+  tag: string
+  // Each attribute with its value, a binding or an event with "", in the
+  // order the template writes them.
+  attributes: [string, string][]
+  // Those a contract can name the element by, past the events the
+  // compiler matches too that are not the element's own.
+  names: string[]
+}
+
+// Bindings no directive selector matches.
+const NOT_SELECTED = /^(?:class\.|style\.|attr\.|animate\.)/
+
+// `[@fade]`: the key the parser spans starts past the `@`.
+function isAnimation(binding: any) {
+  const key = binding?.keySpan?.start
+  return key?.file?.content?.[key.offset - 1] === "@"
+}
+
+const selectors = new WeakMap<object, ElementSelector>()
+
+// What Angular matches a directive's selector against: the tag, each
+// static attribute (the parser keeps i18n's out), each property or
+// two-way binding and each event, by the names the template writes.
+export function selectorOf(element: any): ElementSelector | null {
+  if (element?.type !== "Element") return null
+  let selector = selectors.get(element)
+  if (selector) return selector
+  const written: { at: number; name: string; value: string; own: boolean }[] =
+    []
+  const at = (node: any) => node?.sourceSpan?.start?.offset ?? 0
+  for (const attribute of element.attributes ?? []) {
+    if (typeof attribute?.name !== "string") continue
+    written.push({
+      at: at(attribute),
+      name: attribute.name,
+      value: typeof attribute.value === "string" ? attribute.value : "",
+      own: true,
+    })
+  }
+  for (const input of element.inputs ?? []) {
+    if (typeof input?.name !== "string") continue
+    if (NOT_SELECTED.test(keyOf(input)) || isAnimation(input)) continue
+    written.push({ at: at(input), name: input.name, value: "", own: true })
+  }
+  // Every event, the way the compiler matches them, though an animation's
+  // (`(@fade.done)`, `(animate.leave)`) and one on window, document or
+  // body are not the element's own.
+  for (const output of element.outputs ?? []) {
+    if (typeof output?.name !== "string") continue
+    written.push({
+      at: at(output),
+      name: output.name,
+      value: "",
+      own:
+        !output.target &&
+        !isAnimation(output) &&
+        !NOT_SELECTED.test(keyOf(output)),
+    })
+  }
+  // Stable: a two-way binding's input stays before its event.
+  written.sort((a, b) => a.at - b.at)
+  selector = {
+    tag: tagOf(element),
+    attributes: written.map(({ name, value }) => [name, value]),
+    names: written.flatMap(({ name, own }) => (own ? [name] : [])),
+  }
+  selectors.set(element, selector)
+  return selector
+}
+
+// The names a contract can match on an element: its tag, then its
+// attributes, bindings and events, without the class and style the
+// classes are written in. An <ng-container> renders no element to wear
+// a class.
+export function contractNamesOf(element: any) {
+  const selector = selectorOf(element)
+  if (!selector?.tag || selector.tag === "ng-container") return null
+  const names = new Set([selector.tag])
+  for (const name of selector.names) {
+    if (name !== "class" && name !== "style") names.add(name)
+  }
+  return [...names]
+}
+
 export const angularReader: TemplateReader = {
   attributes: ["TextAttribute", "BoundAttribute"],
   revisited: ["BoundAttribute"],
@@ -356,4 +441,5 @@ export const angularReader: TemplateReader = {
     }
     return null
   },
+  contractNames: contractNamesOf,
 }

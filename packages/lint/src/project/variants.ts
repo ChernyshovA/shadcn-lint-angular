@@ -273,8 +273,10 @@ function readVariants(source: string, file: string) {
   const scopes = new Map<string, any>()
   const types = new Map<string, any>()
   walk(ast, (node, parent) => {
+    // A class too: an Angular directive's cva is used in its body.
     if (
       (node.type === "FunctionDeclaration" ||
+        node.type === "ClassDeclaration" ||
         node.type === "VariableDeclarator" ||
         node.type === "TSTypeAliasDeclaration" ||
         node.type === "TSInterfaceDeclaration") &&

@@ -39,7 +39,7 @@ type Declared = {
   unread: Unread | null
 }
 
-type ComponentMeta = {
+export type ComponentMeta = {
   name: string
   templateUrl: string | null
   // An inline template angular-eslint's processor hands over.
@@ -48,6 +48,12 @@ type ComponentMeta = {
   styles: string[]
   // A metadata value that is not written out.
   unread: string | null
+  // The `imports` of a standalone component, as written.
+  imports: any
+  // `standalone` as written, null when it is not.
+  standalone: boolean | null
+  // Whether the decorator spreads an object, which can carry any option.
+  spreads: boolean
 }
 
 const declaredNothing = (): Declared => ({
@@ -146,12 +152,16 @@ function componentsIn(file: string): ComponentMeta[] {
           styleUrls: [],
           styles: [],
           unread: null,
+          imports: null,
+          standalone: null,
+          spreads: false,
         }
         let template = false
         let templateUrl = false
         for (const property of object.properties) {
           if (property.type !== "Property") {
             // A spread can carry any of them.
+            meta.spreads = true
             meta.unread ??= `the decorator spreads ${shown(property)}`
             continue
           }
@@ -166,6 +176,11 @@ function componentsIn(file: string): ComponentMeta[] {
               (typeof value?.value === "string" && value.value !== "") ||
               (value?.type === "TemplateLiteral" &&
                 (value.quasis.length > 1 || value.quasis[0]?.value?.raw !== ""))
+          } else if (key === "imports") {
+            meta.imports = property.value
+          } else if (key === "standalone") {
+            const value = property.value?.value
+            meta.standalone = typeof value === "boolean" ? value : null
           } else if (
             key === "styleUrl" ||
             key === "styleUrls" ||
@@ -215,6 +230,26 @@ function ownersOf(template: string) {
     }
   }
   return out
+}
+
+// An inline template's component: the nth inline template of the .ts it
+// sits in, or every one when its number cannot be read. Null for a
+// template in a file of its own.
+function inlineMetasOf(template: string, physical: string) {
+  if (template === physical || !/\.[cm]?ts$/.test(physical)) return null
+  const metas = componentsIn(physical).filter((meta) => meta.inline)
+  const nth = /-(\d+)\.component\.html$/.exec(template)
+  const own = nth ? metas[Number(nth[1]) - 1] : undefined
+  return own ? [own] : metas
+}
+
+// The components a template belongs to. `template` is the file the
+// linter was handed, `physical` the file on disk.
+export function templateOwners(template: string, physical: string) {
+  const inline = inlineMetasOf(template, physical)
+  return inline
+    ? inline.map((meta) => ({ file: physical, meta }))
+    : ownersOf(path.resolve(physical))
 }
 
 // A stylesheet being read: the files already read, and the include
@@ -539,13 +574,8 @@ export function angularOwnClassesOf(
   physical: string
 ): OwnClasses {
   const declared = memoize(`angular:own:${template}\u0000${physical}`, () => {
-    if (template !== physical && /\.[cm]?ts$/.test(physical)) {
-      const metas = componentsIn(physical).filter((meta) => meta.inline)
-      const nth = /-(\d+)\.component\.html$/.exec(template)
-      const own = nth ? metas[Number(nth[1]) - 1] : undefined
-      if (own) return declaredBy(physical, [own])
-      return metas.length ? declaredBy(physical, metas) : EMPTY
-    }
+    const inline = inlineMetasOf(template, physical)
+    if (inline) return inline.length ? declaredBy(physical, inline) : EMPTY
     const owners = ownersOf(path.resolve(physical))
     if (!owners.length) return EMPTY
     const declared = declaredNothing()
