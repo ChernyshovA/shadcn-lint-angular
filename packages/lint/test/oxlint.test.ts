@@ -232,4 +232,20 @@ describe.skipIf(!buildUsable)("oxlint", { timeout: RUN_TIMEOUT }, () => {
     expect(out).toContain("only their script blocks are linted")
     expect(out).toContain("Found 0 warnings and 1 error")
   })
+
+  // Oxlint parses no Angular template, .html or inline: a component file
+  // is linted for its host bindings and class helpers only.
+  test("an Angular component file: says once that its template is not read", () => {
+    const project = path.join(FIXTURES, "angular-project")
+    const out = oxlint(project, "src/app/card.component.ts", {
+      "shadcn/no-unknown-classes": "error",
+    })
+    expect(out).toContain(
+      "Angular templates, .html files and inline template strings, are read under ESLint with @angular-eslint/template-parser. Oxlint does not parse them, so in component files only host bindings and class helpers are linted."
+    )
+    const react = oxlint(path.join(FIXTURES, "project"), "app/oxlint.tsx", {
+      "shadcn/no-raw-colors": "error",
+    })
+    expect(react).not.toContain("Angular templates")
+  })
 })

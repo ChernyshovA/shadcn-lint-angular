@@ -178,7 +178,7 @@ export const noRestyle = {
                     ? "deniedClass"
                     : verdict.category === "unclassified"
                       ? declaresClass(filename, token) ||
-                        angular?.declares(token)
+                        angular?.declares(token, site)
                         ? "declaredClass"
                         : "unclassifiedClass"
                       : verdict.entries.length

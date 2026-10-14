@@ -2,6 +2,7 @@ import { isSfc } from "../../project/parser"
 import { warnOnce } from "../../project/warn"
 import { fileOf } from "../../rules/messages"
 import { angularReader } from "./angular"
+import { isAngularCode } from "./angular-code"
 import { recordFile } from "./angular-compiler"
 import { withHostBindings } from "./angular-host"
 import { jsxReader } from "./jsx"
@@ -11,8 +12,8 @@ import { vueReader } from "./vue"
 
 export type { ElementName, ExtraSite, TemplateReader, Visitors } from "./types"
 
-// A script file can declare an Angular component, whose host bindings
-// are a template of their own.
+// A script file that imports Angular can declare a component, whose host
+// bindings are a template of their own.
 const scriptReader = withHostBindings(jsxReader)
 
 const readers = [scriptReader, svelteReader, vueReader, angularReader]
@@ -28,7 +29,7 @@ export function readerFor(context: any) {
   if (typeof services?.convertElementSourceSpanToLoc === "function") {
     return angularReader
   }
-  return scriptReader
+  return isAngularCode(context) ? scriptReader : jsxReader
 }
 
 // Whether this class attribute takes an object with classes as keys.
@@ -143,7 +144,10 @@ function once(visitors: Visitors, reader: TemplateReader): Visitors {
 //
 // A .svelte or .vue file that arrives without its framework's parser has
 // only its script blocks in the AST (Oxlint does this). Passing quietly
-// would read as "checked", so it says so once.
+// would read as "checked", so it says so once. Oxlint parses no Angular
+// template either, .html or inline, and names its parser "oxlint".
+const ANGULAR_COMPONENT = /@Component\s*\(/
+
 export function withTemplates<T extends { create: (context: any) => any }>(
   rule: T
 ) {
@@ -161,6 +165,16 @@ export function withTemplates<T extends { create: (context: any) => any }>(
         warnOnce(
           "templates:unread",
           "Templates in .svelte and .vue files are read under ESLint with svelte-eslint-parser or vue-eslint-parser. This run has no template parser, so only their script blocks are linted. See https://github.com/shadcn-ui/lint/blob/main/docs/vue.md and https://github.com/shadcn-ui/lint/blob/main/docs/svelte.md."
+        )
+      }
+      if (
+        context.languageOptions?.parser?.name === "oxlint" &&
+        isAngularCode(context) &&
+        ANGULAR_COMPONENT.test(context.sourceCode?.text ?? "")
+      ) {
+        warnOnce(
+          "templates:angular",
+          "Angular templates, .html files and inline template strings, are read under ESLint with @angular-eslint/template-parser. Oxlint does not parse them, so in component files only host bindings and class helpers are linted."
         )
       }
       return visitors

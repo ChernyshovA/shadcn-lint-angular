@@ -112,11 +112,123 @@ without them that has a field of spartan's schema (`componentsPath`,
 `libs/ui` when left out, and `tailwind.css` names the entry as above. A
 file with `aliases` is read as shadcn's.
 
+### spartan's theme
+
+The theme spartan's CLI writes imports its tokens from
+`@spartan-ng/brain/hlm-tailwind-preset.css`. Installed from npm, that
+stylesheet sits in `node_modules`, and its tokens are not the
+project's until `themeImports` names the package
+([Theme tokens](./how-it-works.md#theme-tokens)). Without it,
+`no-raw-colors` knows no `primary`: `bg-primaryy` is reported by no
+rule, and a raw color gets no nearest token. Name it:
+
+```js
+export default defineConfig([
+  { settings: { shadcn: { themeImports: ["^@spartan-ng/brain/"] } } },
+  // the blocks above
+])
+```
+
+```text
+"bg-primaryy" is not a declared theme color. Did you mean "bg-primary"?
+Declared colors: accent, background, border, card, ...
+```
+
+A preset imported from outside `node_modules`, as spartan's own
+repository imports it from `libs/brain`, counts without the setting.
+
+### What to lint
+
+`npx eslint .` also lints tests, stories and the page that hosts the
+app. Their classes are not the design system's: a test's fixture
+template, a story's markup, `display: none` on the loading screen in
+`src/index.html`. Leave them out of the plugin's blocks with `ignores`:
+
+```js
+// The /** forms are the inline templates of those files, which
+// angular-eslint's processor hands over as files inside them.
+const ignores = [
+  "**/*.spec.ts",
+  "**/*.spec.ts/**",
+  "**/*.stories.ts",
+  "**/*.stories.ts/**",
+  "**/index.html",
+]
+
+export default defineConfig([
+  {
+    files: ["**/*.ts"],
+    ignores,
+    languageOptions: { parser: tseslint.parser },
+    processor: angular.processInlineTemplates,
+    plugins: { shadcn },
+    rules,
+  },
+  {
+    files: ["**/*.html"],
+    ignores,
+    languageOptions: { parser: angular.templateParser },
+    plugins: { shadcn },
+    rules,
+  },
+])
+```
+
+In blocks `ng add angular-eslint` wrote, `ignores` would leave these
+files out of angular-eslint's rules too. Give the plugin blocks of its
+own after them instead; they take the parser and the processor from
+angular-eslint's:
+
+```js
+export default defineConfig([
+  // the blocks ng add angular-eslint wrote
+  { files: ["**/*.ts"], ignores, plugins: { shadcn }, rules },
+  { files: ["**/*.html"], ignores, plugins: { shadcn }, rules },
+])
+```
+
+### The design system's own directory
+
+The components of the design system style their own internals, so
+`no-restyle` is turned off in their directory
+([no-restyle](./rules/no-restyle.md#setup)), and `no-arbitrary-values`
+with it, for structural values such as `ring-[3px]`
+([Adoption](./adoption.md#add-more-rules)). For spartan, that is the
+directory its CLI generates helm into, `componentsPath` in its
+`components.json`, `libs/ui` by default:
+
+```js
+export default defineConfig([
+  // the blocks above
+  {
+    files: ["libs/ui/**"],
+    rules: {
+      "shadcn/no-restyle": "off",
+      "shadcn/no-arbitrary-values": "off",
+    },
+  },
+])
+```
+
+The pattern takes in the inline templates of the files there, and their
+`host`. `no-raw-colors` and `no-inline-styles` stay on inside it.
+
 ## Oxlint
 
 Oxlint does not parse Angular templates, so no plugin can see
 `class="..."` in them. Run ESLint for `.html` files and for the inline
 templates in `.ts` files.
+
+Under Oxlint, component files are still linted for their `host` bindings
+and class helpers. When one is, the rule says once, on stderr, that
+their templates are not:
+
+```text
+[@shadcn/lint] Angular templates, .html files and inline template
+strings, are read under ESLint with @angular-eslint/template-parser.
+Oxlint does not parse them, so in component files only host bindings and
+class helpers are linted.
+```
 
 ## Example
 
@@ -182,6 +294,11 @@ a pipe or `+` computes: see [What it cannot see](#what-it-cannot-see).
 `[style.color]` sets `color` whatever its value is, so it is reported
 the way `style="color: ..."` is.
 
+A finding on an object's key, `[class]="{ 'p-[13px]': on }"`, is placed
+on the key and suggests a fix there. The compiler of angular-eslint 19
+and 20 does not say where a key starts, so with those versions the
+finding covers the whole object, without a suggestion.
+
 ### Component styles
 
 `no-unknown-classes` knows the classes the component's own styles
@@ -197,7 +314,20 @@ include paths, then into the package a bare name such as
 interpolation, `.btn-#{$size}`, settles every class that starts with
 `btn-`.
 
-Styles that cannot be read settle every class in the template:
+A component's styles also reach its own element where another template
+uses it: `:host(.row-fill)` styles `<app-form-row class="row-fill">`. A
+class in `:host(...)`, written onto `:host` (`:host.row-fill`, or
+`&.row-fill` nested in `:host`) or in or after `:host-context(...)` is
+known on that element, in `class` and in the bindings that put classes
+on it, `[class]`, `[class.x]` and `[ngClass]`, and in no input such as
+`styleClass`. The component is the one whose selector matches the
+element among what the template's component can use, found as
+[Component names](#component-names) finds a directive. One a library
+publishes compiled, or one that cannot be found, declares no class
+there.
+
+Styles that cannot be read settle every class in the template, and on
+the component's element in the templates that use it:
 `styles: [shared]`, a stylesheet that does not exist, a spread in the
 decorator, a selector that starts with an interpolation, or `&-x` inside
 a `@mixin`. No finding is better than a false one there, but the rule
@@ -206,8 +336,8 @@ says so once per component, on stderr:
 ```text
 [@shadcn/lint] The styles of ListComponent in src/app/list.component.ts
 cannot be read: styles holds `shared`, not a string.
-shadcn/no-unknown-classes is skipped in its template, since any class
-there may be one they declare.
+shadcn/no-unknown-classes is skipped in its template and in the classes
+of its element in others, since any class there may be one they declare.
 ```
 
 ### Global styles
@@ -224,6 +354,9 @@ the classes its selectors write out.
 A file belongs to the project whose `root` holds it, the deepest one. A
 library that names no styles of its own sees the styles of every project
 in the workspace, since the applications that use it bring theirs.
+Global styles serve Angular code: templates, and `.ts` files that import
+from `@angular/`. A React, Vue or Svelte file in the same workspace is
+not styled by them and does not see their classes.
 
 Global styles that cannot be read, a stylesheet that does not exist or a
 selector that starts with an interpolation, settle every class in the
@@ -239,7 +372,8 @@ project, and the rule says so once on stderr.
 | `"[class.p-4]": "on"`                  | the class the key names             |
 | `"[style.color]": "c"`, `"[style]"`    | a style, as in a template           |
 
-A finding is placed where the `.ts` spells the class, inside the string,
+`host` is read in files that import from `@angular/`, as every
+`@Component` does. A finding is placed where the `.ts` spells the class, inside the string,
 and its suggestion rewrites it there. `class: base` with
 `const base = "p-4"` in the same file is followed, the way Angular's
 compiler evaluates it. `no-unknown-classes` knows the classes the
@@ -269,7 +403,9 @@ arrow returns an expression or has a block with `return`. Of a helper
 named `classes`, only that first argument is read: spartan's takes its
 options second, `{ elementRef, injector }`, not classes. A function
 passed to anything else is not read: `computed(() => "p-4")` leaves
-`"p-4"` unread. `scanAllStrings` on `no-raw-colors` and
+`"p-4"` unread. Both readings are for spartan, so they apply in files
+that import from `@angular/`; in a React file a helper reads every
+argument, and a function passed to it is not read. `scanAllStrings` on `no-raw-colors` and
 `no-arbitrary-values` reads every string literal in the file instead,
 classes or not.
 
@@ -361,9 +497,11 @@ else after the first that refused the class.
 
 A broad pattern also matches directives that only behave, such as
 `hlmTooltipTrigger`. An element is left alone when every name a contract
-matches on it stands for a directive the template can use and none of
-them styles the element: `<button hlmTooltipTrigger class="…">` is a
-plain button. That takes the directive's source, and that of the
+matches on it stands for an attribute directive the template can use
+and none of them styles the element: `<button hlmTooltipTrigger
+class="…">` is a plain button. A component is never left alone this
+way, whatever its `host` says: it draws itself in its template, as
+`<Card className>` renders its own markup in React. That takes the directive's source, and that of the
 directives it hosts. A library compiled into `node_modules`, such as
 PrimeNG, Angular Material or spartan's brain, says it in its published
 JavaScript: the declaration the Angular linker reads for each class,
@@ -532,6 +670,8 @@ for the component its tag names.
   encapsulation they do not reach this template, so a class only they
   declare is reported. Under `ViewEncapsulation.None` or `::ng-deep`
   they do reach it, and the finding is false. Allow such a class by name.
+  The exception, a component's `:host(.x)` on its own element, is read:
+  see [Component styles](#component-styles).
 - **The styles of the components that use a host.** A host element sits
   in the template of the component that renders it, so that component's
   styles reach it: `host: { class: "connections" }` styled by

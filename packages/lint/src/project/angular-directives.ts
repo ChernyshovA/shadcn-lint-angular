@@ -58,6 +58,9 @@ type Known = DirectiveClass & {
 }
 
 export type DirectiveRef = Known & {
+  // A component draws itself in its template, whatever it puts on its
+  // element.
+  component: boolean
   // Whether it styles the element, or a directive it hosts does: see
   // stylesHost, and for a library's, the host its published JavaScript
   // declares; or takes the element's class into an input, see
@@ -1210,11 +1213,32 @@ export function directiveOf(
     if (found) {
       return {
         ...knownOf(found.directive),
+        component: found.directive.component,
         styles: either([
           takesClass(found.directive),
           stylesIn(found.directive, helpers),
         ]),
       }
+    }
+  }
+  return null
+}
+
+// The component an element is the host of, by whatever selector matched
+// it: the project's own, whose styles can be read. Null for a library's
+// compiled one, or when none can be told.
+export function hostComponentOf(
+  template: string,
+  physical: string,
+  element: ElementSelector,
+  helpers: ReadonlySet<string>
+): DirectiveClass | null {
+  for (const { matched } of matchesOf(template, physical, element, helpers) ??
+    []) {
+    const found = matched.find(({ directive }) => directive.component)
+    if (found) {
+      const { file, name, sole, compiled } = found.directive
+      return compiled ? null : { file, name, sole }
     }
   }
   return null

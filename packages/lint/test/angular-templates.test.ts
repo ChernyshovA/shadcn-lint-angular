@@ -1147,7 +1147,7 @@ describe("Angular templates", () => {
             unknown(`<ul class="list-other"></ul>`, "list-opaque.html")
           ).toEqual([])
           expect(warnings).toEqual([
-            "[@shadcn/lint] The styles of ListOpaque in src/app/list.ts cannot be read: styles holds `shared`, not a string. shadcn/no-unknown-classes is skipped in its template, since any class there may be one they declare.",
+            "[@shadcn/lint] The styles of ListOpaque in src/app/list.ts cannot be read: styles holds `shared`, not a string. shadcn/no-unknown-classes is skipped in its template and in the classes of its element in others, since any class there may be one they declare.",
           ])
         })
 
@@ -1156,7 +1156,7 @@ describe("Angular templates", () => {
             unknown(`<div class="missing-anything"></div>`, "missing.html")
           ).toEqual([])
           expect(warnings).toEqual([
-            "[@shadcn/lint] The styles of Missing in src/app/missing.ts cannot be read: the stylesheet ./missing.scss does not exist. shadcn/no-unknown-classes is skipped in its template, since any class there may be one they declare.",
+            "[@shadcn/lint] The styles of Missing in src/app/missing.ts cannot be read: the stylesheet ./missing.scss does not exist. shadcn/no-unknown-classes is skipped in its template and in the classes of its element in others, since any class there may be one they declare.",
           ])
         })
 
@@ -1165,7 +1165,7 @@ describe("Angular templates", () => {
             unknown(`<div class="tone-red"></div>`, "generated.html")
           ).toEqual([])
           expect(warnings).toEqual([
-            "[@shadcn/lint] The styles of Generated in src/app/generated.ts cannot be read: the selector `.#{…}` starts with an interpolation in src/app/generated.scss. shadcn/no-unknown-classes is skipped in its template, since any class there may be one they declare.",
+            "[@shadcn/lint] The styles of Generated in src/app/generated.ts cannot be read: the selector `.#{…}` starts with an interpolation in src/app/generated.scss. shadcn/no-unknown-classes is skipped in its template and in the classes of its element in others, since any class there may be one they declare.",
           ])
         })
 
@@ -1189,7 +1189,7 @@ describe("Angular templates", () => {
                 .map((m) => m.message.split('"')[1])
             ).toEqual(["pair-unknown"])
             expect(warnings).toEqual([
-              "[@shadcn/lint] The styles of InlineSpread in src/app/inline-pair.ts cannot be read: the decorator spreads `...base`. shadcn/no-unknown-classes is skipped in its template, since any class there may be one they declare.",
+              "[@shadcn/lint] The styles of InlineSpread in src/app/inline-pair.ts cannot be read: the decorator spreads `...base`. shadcn/no-unknown-classes is skipped in its template and in the classes of its element in others, since any class there may be one they declare.",
             ])
           } finally {
             useParser(null)
@@ -1210,6 +1210,67 @@ describe("Angular templates", () => {
         } finally {
           useParser(null)
         }
+      })
+
+      // `:host(.x)` in a component's styles compiles to `.x[_nghost-…]`:
+      // it styles the component's element where another template uses
+      // it. The component is found among what the template's component
+      // imports, by its selector.
+      describe("on the element of a component the template uses", () => {
+        const PARENT = "host/parent.component.html"
+
+        it("knows the classes its styles select on :host", () => {
+          expect(
+            unknown(
+              `<app-form-row class="row-align-end row-fill row-align-start row-dense row-nested theme-dark row-dark row-wide row-cell row-inner row-typo"></app-form-row>`,
+              PARENT
+            )
+          ).toEqual(["row-cell", "row-inner", "row-typo"])
+        })
+
+        it("in the bindings that put classes on the element", () => {
+          expect(
+            unknown(
+              `<app-form-row [class.row-fill]="on" [ngClass]="{ 'row-dense': on }" [class]="on ? 'row-wide' : 'row-typo'"></app-form-row>`,
+              PARENT
+            )
+          ).toEqual(["row-typo"])
+        })
+
+        it("not on another element, nor in an input that hands its classes on", () => {
+          expect(
+            unknown(
+              `<div class="row-align-end"></div><app-form-row panelClass="row-fill"></app-form-row>`,
+              PARENT
+            )
+          ).toEqual(["row-align-end", "row-fill"])
+        })
+
+        it("settles every class on the element when its styles cannot be read, and says so", () => {
+          expect(
+            unknown(
+              `<app-opaque class="opaque-x opaque-y"></app-opaque><div class="opaque-y"></div>`,
+              PARENT
+            )
+          ).toEqual(["opaque-y"])
+          expect(warnings).toEqual([
+            "[@shadcn/lint] The styles of OpaqueComponent in src/app/host/opaque.component.ts cannot be read: styles holds `shared`, not a string. shadcn/no-unknown-classes is skipped in its template and in the classes of its element in others, since any class there may be one they declare.",
+          ])
+        })
+
+        it("reports as before without the compiler", () => {
+          setAngularCompilerForTests(null)
+          try {
+            expect(
+              unknown(
+                `<app-form-row class="row-align-end"></app-form-row>`,
+                PARENT
+              )
+            ).toEqual(["row-align-end"])
+          } finally {
+            setAngularCompilerForTests(undefined)
+          }
+        })
       })
     }
   )

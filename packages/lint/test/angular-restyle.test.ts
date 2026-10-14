@@ -214,6 +214,18 @@ describe("no-restyle in Angular templates", () => {
         workspace
       ).map((m) => m.message)
     ).toEqual([declared("page-shell-header"), declared("fi-check")])
+    // A class the styles of the component on the element select on its
+    // host, `:host(.row-fill)`.
+    expect(
+      lint(
+        `<app-form-row class="row-fill made-up"></app-form-row>`,
+        { allow: ["layout"], contracts: [{ pattern: "app-form-row" }] },
+        path.join(PROJECT, "src/app/host/parent.component.html")
+      ).map((m) => m.message)
+    ).toEqual([
+      '"row-fill" is not allowed on <app-form-row>: your CSS declares it, and the grammar cannot tell what it changes. Use a variant, or put it on a parent element.',
+      '"made-up" is not allowed on <app-form-row>: the grammar does not recognize it. Fix the spelling, or use a class Tailwind generates.',
+    ])
   })
 
   it("an invalid regex is a configuration error", () => {
@@ -580,6 +592,27 @@ describe("variants of the directive a name stands for", () => {
       lintAt(`<div uiPopoverTrigger><button uiBtn class="px-8"></button></div>`)
     ).toEqual([
       '"px-8" is not allowed on <button uiBtn>: <button uiBtn> owns its spacing. Use a size (default, sm, lg), or margin here or gap on the parent for space around it. Add a size in libs/ui/button/src/lib/ui-button.ts only if the design explicitly calls for one.',
+    ])
+  })
+
+  // A component draws itself in its template, the way <Card className>
+  // renders its own markup in React: it is judged whether or not it puts
+  // classes on its element.
+  it("judges a component that styles nothing on its element", () => {
+    expect(
+      lintAt(
+        `<ui-panel class="bg-pink-500"></ui-panel><button uiFab class="bg-pink-500"></button><button uiFab uiPopoverTrigger class="bg-pink-500"></button>`
+      )
+    ).toEqual([
+      '"bg-pink-500" is not allowed on <ui-panel>: <ui-panel> owns its color. Add a variant to <ui-panel> only if the design explicitly calls for this treatment.',
+      '"bg-pink-500" is not allowed on <button uiFab>: <button uiFab> owns its color. Add a variant to <button uiFab> only if the design explicitly calls for this treatment.',
+      '"bg-pink-500" is not allowed on <button uiFab>: <button uiFab> owns its color. Add a variant to <button uiFab> only if the design explicitly calls for this treatment.',
+    ])
+    // Nor is it a plain parent for space around an element inside it.
+    expect(
+      lintAt(`<ui-panel><button uiBtn class="px-8"></button></ui-panel>`)
+    ).toEqual([
+      '"px-8" is not allowed on <button uiBtn>: <button uiBtn> owns its spacing. Use a size (default, sm, lg), or margin here or gap on a plain wrapper around it for space around it. Add a size in libs/ui/button/src/lib/ui-button.ts only if the design explicitly calls for one.',
     ])
   })
 

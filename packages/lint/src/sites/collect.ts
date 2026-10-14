@@ -25,6 +25,7 @@ import {
   type ElementName,
   type Visitors,
 } from "./readers"
+import { isAngularCode } from "./readers/angular-code"
 import { jsxElementNameOf } from "./readers/jsx"
 
 export { attributeNameOf, jsxRootOf } from "./readers/jsx"
@@ -780,6 +781,9 @@ export function collectClassStrings(
   const valueHelpers =
     options.variantFunctions ?? new Set(DEFAULT_VARIANT_FUNCTIONS)
   const resolve = options.resolve ?? true
+  // spartan's helpers are read as spartan means them only where spartan
+  // can be: in Angular code.
+  const angular = isAngularCode(context)
   const contextualStrings: ClassString[] = []
   const vocabularyStrings: ClassString[] = []
   const unresolved: any[] = []
@@ -930,7 +934,7 @@ export function collectClassStrings(
           if (hopped) resolvedCalls++
           if (valueHelpers.has(callee)) {
             for (const arg of node.arguments) visitVariantConfig(arg)
-          } else {
+          } else if (angular) {
             // spartan's `classes(computed, options)`: the options name the
             // element and injector, not classes.
             const args =
@@ -938,9 +942,13 @@ export function collectClassStrings(
             for (const arg of args) {
               // spartan's `classes(() => "p-4")` merges what it returns.
               if (arg?.type === "ArrowFunctionExpression") {
-                for (const value of returnedValues(arg)) visit(value, false)
+                if (!arg.async) {
+                  for (const value of returnedValues(arg)) visit(value, false)
+                }
               } else visit(arg, false)
             }
+          } else {
+            for (const arg of node.arguments) visit(arg, false)
           }
           if (hopped) resolvedCalls--
           return

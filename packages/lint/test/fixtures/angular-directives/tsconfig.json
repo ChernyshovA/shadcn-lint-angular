@@ -13,7 +13,8 @@
       "@acme/ui/dropdown-menu": ["libs/ui/dropdown-menu/src/index.ts"],
       "@acme/ui/tooltip": ["libs/ui/tooltip/src/index.ts"],
       "@acme/ui/alert": ["libs/ui/alert/src/index.ts"],
-      "@acme/ui/banner": ["libs/ui/banner/src/index.ts"]
+      "@acme/ui/banner": ["libs/ui/banner/src/index.ts"],
+      "@acme/ui/panel": ["libs/ui/panel/src/index.ts"]
     }
   }
 }

@@ -9,12 +9,14 @@
 import { normalizeClass, OPACITY_MODIFIER } from "../grammar/classes"
 import {
   directiveOf,
+  hostComponentOf,
   inputOwnersOf,
   type DirectiveClass,
   type DirectiveRef,
 } from "../project/angular-directives"
 import {
   angularGlobalClassesOf,
+  angularHostClassesOf,
   angularOwnClassesOf,
   type OwnClasses,
 } from "../project/angular-styles"
@@ -38,7 +40,7 @@ type Contracts = ReturnType<typeof compileContracts>
 // input such as styleClass, panelClass or enterActiveClass hands its
 // classes to the directive that takes it, which puts them where it
 // likes: inside its component, or on another element.
-const ON_ELEMENT = new Set(["class", "ngClass", "routerLinkActive"])
+export const ON_ELEMENT = new Set(["class", "ngClass", "routerLinkActive"])
 
 type Named = Subject & {
   // Whether the directive styles the element it is on.
@@ -67,16 +69,26 @@ export function angularRestyle(
   ])
 
   // A template's classes are also declared by its component's styles and
-  // the project's global ones, as no-unknown-classes reads them. Styles
-  // that could not be read declare nothing a message could name.
+  // the project's global ones, and those on a component's element by the
+  // styles of that component, `:host(.x)`, as no-unknown-classes reads
+  // them. Styles that could not be read declare nothing a message could
+  // name.
   let styles: OwnClasses[] | undefined
-  const declares = (token: string) => {
+  const declares = (token: string, site: ClassSite) => {
     styles ??= [
       angularOwnClassesOf(template, physical),
       angularGlobalClassesOf(physical),
     ].filter((own): own is OwnClasses => !!own && !own.unread)
     const base = normalizeClass(token).replace(OPACITY_MODIFIER, "")
-    return !!base && styles.some((own) => own.has(base))
+    if (!base) return false
+    if (styles.some((own) => own.has(base))) return true
+    if (!site.element || !ON_ELEMENT.has(site.attribute ?? "")) return false
+    const selector = selectorOf(site.element)
+    const component =
+      selector && hostComponentOf(template, physical, selector, helpers)
+    const host =
+      component && angularHostClassesOf(component.file, component.name)
+    return !!host && !host.unread && host.has(base)
   }
 
   // An element with the contracts its names match, or null.
@@ -109,15 +121,17 @@ export function angularRestyle(
 
   // A broad pattern also matches directives that only behave: a trigger,
   // a tooltip. An element whose every matched name stands for one of
-  // those is no design-system component. A name no imported directive
+  // those attribute directives is no design-system component. A component
+  // is one, drawn in its own template, and a name no imported directive
   // stands for may still be one that styles.
   const plain = new WeakMap<object, boolean>()
   const isPlain = (element: any, matched: readonly ElementIdentity[]) => {
     let known = plain.get(element)
     if (known === undefined) {
-      known = matched.every(
-        ({ name }) => directiveAt(element, name)?.styles === false
-      )
+      known = matched.every(({ name }) => {
+        const directive = directiveAt(element, name)
+        return directive?.styles === false && !directive.component
+      })
       plain.set(element, known)
     }
     return known

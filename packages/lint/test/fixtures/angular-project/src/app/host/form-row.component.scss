@@ -1,0 +1,36 @@
+// What reaches the host element from where a template uses it.
+:host {
+  display: grid;
+}
+
+:host(.row-align-end) {
+  align-items: end;
+}
+
+:host(.row-fill):not(.row-align-start) {
+  width: 100%;
+}
+
+:host(.row-dense) .row-cell {
+  gap: 0;
+}
+
+:host {
+  &.row-nested {
+    color: inherit;
+  }
+}
+
+:host-context(.theme-dark).row-dark {
+  color: white;
+}
+
+@media (min-width: 40rem) {
+  :host(.row-wide) {
+    width: 40rem;
+  }
+}
+
+.row-inner {
+  padding: 0;
+}

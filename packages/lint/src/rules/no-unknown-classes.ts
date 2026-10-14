@@ -6,9 +6,11 @@
 import { categoryOf } from "../grammar/categories"
 import { isMarkerClass, normalizeClass, splitClasses } from "../grammar/classes"
 import { didYouMean } from "../grammar/similar"
+import { hostComponentOf } from "../project/angular-directives"
 import {
   angularFileClassesOf,
   angularGlobalClassesOf,
+  angularHostClassesOf,
   angularOwnClassesOf,
   type OwnClasses,
 } from "../project/angular-styles"
@@ -24,11 +26,17 @@ import {
   warnNoTailwindEntry,
 } from "../project/theme"
 import { warnOnce } from "../project/warn"
-import { classSiteVisitors } from "../sites/collect"
+import {
+  classSiteVisitors,
+  DEFAULT_MERGE_FUNCTIONS,
+  type ClassSite,
+} from "../sites/collect"
 import { readerFor } from "../sites/readers"
-import { angularReader } from "../sites/readers/angular"
+import { angularReader, selectorOf } from "../sites/readers/angular"
+import { isAngularCode } from "../sites/readers/angular-code"
 import { hostBindingOf } from "../sites/readers/angular-host"
 import { unknownClasses } from "../tailwind/client"
+import { ON_ELEMENT } from "./angular-restyle"
 import { compileVocabularyPolicy, configErrorVisitors } from "./contracts"
 import { classSuggestions } from "./fixes"
 import { displayPath, fileOf, reporter } from "./messages"
@@ -36,26 +44,35 @@ import { colorValueOf } from "./no-raw-colors"
 import { policySchema, recognitionSchema } from "./policy-schema"
 import { withSettings } from "./settings"
 
-// Styles that cannot be read settle every class in the template, so the
-// rule says once per component that it is not checking there. Host
-// bindings in the component's .ts are judged by the same styles.
-function angularOwnClasses(context: any, filename: string, host = false) {
-  const own = host
-    ? angularFileClassesOf(filename)
-    : angularOwnClassesOf(context.filename ?? filename, filename)
+// Styles that cannot be read settle every class in the template, and on
+// the component's element in the templates that use it, so the rule says
+// once per component that it is not checking there.
+function warnUnread(context: any, own: OwnClasses) {
   const { unread } = own
   if (unread?.file) {
     warnOnce(
       `angular-styles:${unread.file}:${unread.component}`,
-      `The styles of ${unread.component} in ${displayPath(unread.file, context)} cannot be read: ${unread.reason}${whereOf(unread.where, context)}. shadcn/no-unknown-classes is skipped in its template, since any class there may be one they declare.`
+      `The styles of ${unread.component} in ${displayPath(unread.file, context)} cannot be read: ${unread.reason}${whereOf(unread.where, context)}. shadcn/no-unknown-classes is skipped in its template and in the classes of its element in others, since any class there may be one they declare.`
     )
   }
   return own
 }
 
-// The global stylesheets of an Angular project serve every file in it,
-// and settle every class when they cannot be read.
+// Host bindings in the component's .ts are judged by the same styles.
+function angularOwnClasses(context: any, filename: string, host = false) {
+  return warnUnread(
+    context,
+    host
+      ? angularFileClassesOf(filename)
+      : angularOwnClassesOf(context.filename ?? filename, filename)
+  )
+}
+
+// The global stylesheets of an Angular project serve every Angular file
+// in it, and settle every class when they cannot be read. A React file in
+// the same workspace is not styled by them.
 function angularGlobalClasses(context: any, filename: string) {
+  if (!isAngularCode(context)) return null
   const global = angularGlobalClassesOf(filename)
   const unread = global?.unread
   if (unread?.file) {
@@ -155,6 +172,41 @@ export const noUnknownClasses = {
       hostBindingOf(site.node)
         ? (hostClasses ??= angularOwnClasses(context, filename, true))
         : ownClasses
+    // A class on the element of a component the template uses may be one
+    // that component's styles select on its host, `:host(.x)`. Finding the
+    // component reads the template's scope, so it is asked only of a class
+    // nothing else knows.
+    const angular = readerFor(context) === angularReader
+    const helpers = new Set([
+      ...DEFAULT_MERGE_FUNCTIONS,
+      ...(options.mergeFunctions ?? []),
+    ])
+    const hosts = new WeakMap<object, OwnClasses | null>()
+    const hostedOn = (element: any) => {
+      if (!hosts.has(element)) {
+        const selector = selectorOf(element)
+        const component =
+          selector &&
+          hostComponentOf(
+            context.filename ?? filename,
+            filename,
+            selector,
+            helpers
+          )
+        const classes =
+          component && angularHostClassesOf(component.file, component.name)
+        hosts.set(element, classes ? warnUnread(context, classes) : null)
+      }
+      return hosts.get(element)
+    }
+    const hostOf = (site: ClassSite) =>
+      angular && site.element && ON_ELEMENT.has(site.attribute ?? "")
+        ? (token: string) =>
+            !!hostedOn(site.element)?.has(
+              normalizeClass(token).replace(/\/[\w.%]+$/, "")
+            )
+        : () => false
+
     const settled = (token: string, own = ownClasses) => {
       const base = normalizeClass(token)
       if (!base) return true
@@ -234,6 +286,7 @@ export const noUnknownClasses = {
     return classSiteVisitors(context, options, (site) => {
       const own = ownClassesOf(site)
       const host = hostBindingOf(site.node) !== null
+      const hosted = host ? () => false : hostOf(site)
       for (const { value, node } of site.vocabularyStrings) {
         const wordsFor = new Map<string, string | null>()
         const tokens = splitClasses(value).filter((token) => {
@@ -255,6 +308,7 @@ export const noUnknownClasses = {
               !ownsColorTypo(token, suggestion)
             )
               continue
+            if (hosted(token)) continue
             report(
               node,
               token,
@@ -268,7 +322,7 @@ export const noUnknownClasses = {
           continue
         }
         for (const token of tokens) {
-          if (!knownByGrammar(token))
+          if (!knownByGrammar(token) && !hosted(token))
             report(
               node,
               token,

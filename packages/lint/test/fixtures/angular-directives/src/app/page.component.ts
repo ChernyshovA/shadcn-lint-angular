@@ -14,6 +14,7 @@ import {
   UiSheet,
   UiToast,
 } from "@acme/ui/menu"
+import { UiFab, UiPanel } from "@acme/ui/panel"
 import { UiPopoverTrigger } from "@acme/ui/popover"
 import { UiToggle } from "@acme/ui/toggle"
 import { UiTooltip } from "@acme/ui/tooltip"
@@ -40,6 +41,8 @@ import { MultiSelect } from "./multi-select.directive"
     UiInputGroupButton,
     UiMenu,
     UiOpaque,
+    UiFab,
+    UiPanel,
     UiPopoverTrigger,
     UiSheet,
     UiToast,

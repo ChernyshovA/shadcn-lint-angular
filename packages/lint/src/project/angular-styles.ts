@@ -36,6 +36,10 @@ export type OwnClasses = {
 type Declared = {
   classes: Set<string>
   prefixes: string[]
+  // Those a selector puts on the component's own element, `:host(.x)`,
+  // which reach it where another template uses the component.
+  host: Set<string>
+  hostPrefixes: string[]
   unread: Unread | null
 }
 
@@ -59,6 +63,8 @@ export type ComponentMeta = {
 const declaredNothing = (): Declared => ({
   classes: new Set(),
   prefixes: [],
+  host: new Set(),
+  hostPrefixes: [],
   unread: null,
 })
 
@@ -360,6 +366,31 @@ function nest(parents: string[], selector: string) {
 const written = (selector: string) =>
   selector.replaceAll(HOLE, "#{…}").replaceAll(UNKNOWN, "&")
 
+const classNamesIn = (text: string) =>
+  [
+    ...text.matchAll(new RegExp(`\\.(-?[_a-zA-Z${HOLE}][\\w${HOLE}-]*)`, "g")),
+  ].map((match) => match[1])
+
+// The compound selectors that put classes on the component's own element:
+// `:host(.x)`, `:host.x` (`&.x` inside `:host`), and `:host-context(.y).x`,
+// whose context may be the element itself. Angular's emulation compiles
+// each to `.x[_nghost-…]` (ShadowCss in @angular/compiler).
+function hostCompoundsOf(selector: string) {
+  const out: string[] = []
+  for (const match of selector.matchAll(/:host(?:-context)?(?![\w-])/g)) {
+    let depth = 0
+    let end = match.index
+    for (; end < selector.length; end++) {
+      const c = selector[end]
+      if (c === "(") depth++
+      else if (c === ")") depth--
+      else if (depth === 0 && /[\s>+~]/.test(c)) break
+    }
+    out.push(selector.slice(match.index, end))
+  }
+  return out
+}
+
 function addSelector(
   selector: string,
   declared: Declared,
@@ -372,10 +403,7 @@ function addSelector(
       where: file,
     }
   }
-  for (const match of selector.matchAll(
-    new RegExp(`\\.(-?[_a-zA-Z${HOLE}][\\w${HOLE}-]*)`, "g")
-  )) {
-    const name = match[1]
+  for (const name of classNamesIn(selector)) {
     const hole = name.indexOf(HOLE)
     if (hole === -1) declared.classes.add(name)
     else if (hole === 0) {
@@ -384,6 +412,13 @@ function addSelector(
         where: file,
       }
     } else declared.prefixes.push(name.slice(0, hole))
+  }
+  for (const compound of hostCompoundsOf(selector)) {
+    for (const name of classNamesIn(compound)) {
+      const hole = name.indexOf(HOLE)
+      if (hole === -1) declared.host.add(name)
+      else if (hole > 0) declared.hostPrefixes.push(name.slice(0, hole))
+    }
   }
 }
 
@@ -588,6 +623,29 @@ export function angularOwnClassesOf(
     return declared
   })
   return toOwnClasses(declared)
+}
+
+// The classes the styles of a component select on its own element, as
+// `:host(.row-fill)` does: where another template uses the component,
+// its element there wears them. Every class when its styles cannot be
+// read, as in its own template. Null when the file declares no such
+// component.
+export function angularHostClassesOf(
+  file: string,
+  name: string
+): OwnClasses | null {
+  const declared = memoize(`angular:host:${file}\u0000${name}`, () => {
+    const meta = componentsIn(file).find((meta) => meta.name === name)
+    return meta ? declaredBy(file, [meta]) : null
+  })
+  if (!declared) return null
+  return {
+    has: (className) =>
+      !!declared.unread ||
+      declared.host.has(className) ||
+      declared.hostPrefixes.some((prefix) => className.startsWith(prefix)),
+    unread: declared.unread,
+  }
 }
 
 // The classes the styles of the components a .ts file declares select,

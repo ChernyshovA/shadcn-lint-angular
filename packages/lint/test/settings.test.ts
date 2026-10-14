@@ -136,8 +136,11 @@ describe("settings.shadcn as shared defaults", () => {
     expect(viaSetting).toEqual(viaOption)
   })
 
-  test("a helper from mergeFunctions reads what a function passed to it returns", () => {
+  // Angular code only: a React helper that takes a function stays as
+  // upstream reads it (angular-boundaries.test.ts).
+  test("in Angular code, a helper from mergeFunctions reads what a function passed to it returns", () => {
     const code = [
+      `import { Directive } from "@angular/core"`,
       `import { classes } from "./classes"`,
       `const a = classes(() => "p-[1px]")`,
       `const b = classes(() => {`,
@@ -166,8 +169,9 @@ describe("settings.shadcn as shared defaults", () => {
 
   // spartan's `classes(computed, options)` (libs/helm/utils/src/lib/hlm.ts):
   // the options are the element and injector to apply the classes with.
-  test("spartan's classes() reads its first argument only, other helpers every one", () => {
+  test("in Angular code, spartan's classes() reads its first argument only, other helpers every one", () => {
     const code = [
+      `import { Directive } from "@angular/core"`,
       `import { classes, hlm } from "./hlm"`,
       `const elementRef = {}`,
       `classes(() => "flex-cols", { elementRef, injector: child })`,
