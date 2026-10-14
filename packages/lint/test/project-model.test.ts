@@ -78,6 +78,19 @@ describe("resolve", () => {
     ).toBe(path.join(MONO, "packages/ui/src/styles/globals.css"))
   })
 
+  test("a stylesheet's import takes a package's style export, a script's its JavaScript", () => {
+    const app = path.join(PROJECT, "app")
+    expect(
+      resolveFile("tailwindcss", app, PROJECT, [".css"], { stylesheet: true })
+    ).toMatch(/tailwindcss[\\/]index\.css$/)
+    expect(resolveFile("tailwindcss", app, PROJECT)).toMatch(
+      /tailwindcss[\\/]dist[\\/]lib\.mjs$/
+    )
+    expect(
+      resolveFile("style-only", app, PROJECT, [".css"], { stylesheet: true })
+    ).toBe(path.join(PROJECT, "node_modules/style-only/styles/style-only.css"))
+  })
+
   test("relative paths and the @/ convention", () => {
     expect(resolveFile("./ds", path.join(NO_JSON, "src"), NO_JSON)).toBe(
       DS_INDEX
@@ -86,6 +99,133 @@ describe("resolve", () => {
       resolveFile("@/ds/button", path.join(NO_JSON, "src/app"), NO_JSON)
     ).toBe(DS_BUTTON)
     expect(resolveFile("@/nothing", NO_JSON, NO_JSON)).toBeNull()
+  })
+})
+
+// A stylesheet's @import resolves the way @tailwindcss/node does: the
+// `style` condition and `default`, in the order a package writes them,
+// else its `style` field. A script is never read as CSS.
+describe("a stylesheet's package import", () => {
+  let root: string
+  const write = (file: string, text: string) => {
+    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true })
+    fs.writeFileSync(path.join(root, file), text)
+  }
+  const pkg = (name: string, manifest: object, files: string[]) => {
+    write(
+      `node_modules/${name}/package.json`,
+      JSON.stringify({ name, ...manifest })
+    )
+    for (const file of files) write(`node_modules/${name}/${file}`, "")
+  }
+  const css = (spec: string) => {
+    const found = resolveFile(spec, root, root, [".css"], { stylesheet: true })
+    return found && path.relative(fs.realpathSync(root), found)
+  }
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "shadcn-lint-css-imports-"))
+    write("package.json", "{}")
+  })
+  afterEach(() => {
+    resetFsMemo()
+    fs.rmSync(root, { recursive: true, force: true })
+  })
+
+  test("the style field of a package without exports", () => {
+    pkg("primeicons", { style: "primeicons.css", main: "index.js" }, [
+      "primeicons.css",
+      "index.js",
+    ])
+    expect(css("primeicons")).toBe("node_modules/primeicons/primeicons.css")
+  })
+
+  test("exports written short: a string, or conditions without a path", () => {
+    pkg("short", { exports: "./short.css" }, ["short.css"])
+    pkg("sugar", { exports: { style: "./s.css", default: "./s.js" } }, [
+      "s.css",
+      "s.js",
+    ])
+    expect(css("short")).toBe("node_modules/short/short.css")
+    expect(css("sugar")).toBe("node_modules/sugar/s.css")
+  })
+
+  test("default alone, unless it maps to a script", () => {
+    pkg("plain", { exports: { ".": { default: "./plain.css" } } }, [
+      "plain.css",
+    ])
+    pkg(
+      "script",
+      { exports: { ".": { types: "./i.d.ts", default: "./i.js" } } },
+      ["i.js"]
+    )
+    expect(css("plain")).toBe("node_modules/plain/plain.css")
+    expect(css("script")).toBeNull()
+  })
+
+  test("a wildcard export's style condition", () => {
+    pkg(
+      "kit",
+      { exports: { "./*": { style: "./css/*", import: "./js/*.mjs" } } },
+      ["css/theme.css", "js/theme.css.mjs"]
+    )
+    expect(css("kit/theme.css")).toBe("node_modules/kit/css/theme.css")
+  })
+
+  test("conditions nested under style, not under one Tailwind does not read", () => {
+    pkg(
+      "nested",
+      {
+        exports: {
+          ".": { style: { production: "./p.css", default: "./d.css" } },
+        },
+      },
+      ["p.css", "d.css"]
+    )
+    pkg(
+      "node-only",
+      {
+        exports: {
+          ".": { node: { style: "./n.css" }, default: "./n.js" },
+        },
+      },
+      ["n.css", "n.js"]
+    )
+    expect(css("nested")).toBe("node_modules/nested/d.css")
+    expect(css("node-only")).toBeNull()
+  })
+
+  test("a package.json #import's style condition", () => {
+    write(
+      "package.json",
+      JSON.stringify({
+        imports: {
+          "#theme": { style: "./src/theme.css", default: "./src/theme.js" },
+        },
+      })
+    )
+    write("src/theme.css", "")
+    write("src/theme.js", "")
+    expect(css("#theme")).toBe("src/theme.css")
+  })
+
+  // Tailwind fails on such an import. The linter reads the package's
+  // index.css when it has one, as it does without exports, and never its
+  // JavaScript.
+  test("a package whose exports map only scripts falls back to its index.css", () => {
+    pkg(
+      "scripts",
+      {
+        exports: {
+          ".": { import: "./dist/index.mjs", require: "./dist/index.cjs" },
+        },
+      },
+      ["dist/index.mjs", "dist/index.cjs", "index.css"]
+    )
+    pkg("bare", { exports: { ".": { import: "./dist/index.mjs" } } }, [
+      "dist/index.mjs",
+    ])
+    expect(css("scripts")).toBe("node_modules/scripts/index.css")
+    expect(css("bare")).toBeNull()
   })
 })
 

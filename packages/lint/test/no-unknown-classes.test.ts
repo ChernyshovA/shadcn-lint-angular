@@ -96,6 +96,28 @@ describe("no-unknown-classes", () => {
     })
   })
 
+  // tailwindcss maps the "." export's `import` to its JavaScript and its
+  // `style` to its CSS. Read as CSS, the JavaScript declared every word
+  // after a dot in it (value, map, length) a class.
+  test("the JavaScript of the package a stylesheet imports declares no class", () => {
+    const code = `export const A = () => <div className="value map length bogus-x" />`
+    tester.run("no-unknown-classes", noUnknownClasses as any, {
+      valid: [],
+      invalid: [
+        {
+          filename: PAGE,
+          code,
+          errors: [
+            unknown(code, "value", null),
+            unknown(code, "map", null),
+            unknown(code, "length", null),
+            unknown(code, "bogus-x", null),
+          ],
+        },
+      ],
+    })
+  })
+
   test.skipIf(!oracle)("with Tailwind: invented variants and values", () => {
     const code = `export const A = () => <div className="hovr:flex tablet:flex rounded-huge" />`
     tester.run("no-unknown-classes", noUnknownClasses as any, {

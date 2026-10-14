@@ -188,16 +188,34 @@ function readPackageJson(dir: string) {
   return json
 }
 
-function pickTarget(value: any): string | null {
-  if (typeof value === "string") return value
+// A stylesheet's @import reads only these conditions, as Tailwind does,
+// in the order a package writes them: tailwindcss maps "." to its
+// JavaScript under `import` and `require`.
+const STYLE_CONDITIONS = new Set(["style", "default"])
+
+// Whatever a condition maps to it, a script is never read as CSS.
+const SCRIPT = /\.(?:[cm]?[jt]sx?|json|node)$/
+
+function pickTarget(value: any, stylesheet = false): string | null {
+  if (typeof value === "string") {
+    return stylesheet && SCRIPT.test(value) ? null : value
+  }
   if (Array.isArray(value)) {
     for (const item of value) {
-      const picked = pickTarget(item)
+      const picked = pickTarget(item, stylesheet)
       if (picked) return picked
     }
     return null
   }
   if (value && typeof value === "object") {
+    if (stylesheet) {
+      for (const [key, target] of Object.entries(value)) {
+        if (!STYLE_CONDITIONS.has(key)) continue
+        const picked = pickTarget(target, true)
+        if (picked) return picked
+      }
+      return null
+    }
     for (const key of ["import", "default", "require", "node", "types"]) {
       if (key in value) {
         const picked = pickTarget(value[key])
@@ -213,8 +231,25 @@ function pickTarget(value: any): string | null {
   return null
 }
 
+// `"exports": "./x.css"` and `"exports": { "style": …, "default": … }`
+// are the "." export written short, as Node reads them.
+function stylesheetExports(exports: any) {
+  if (typeof exports === "string" || Array.isArray(exports)) {
+    return { ".": exports }
+  }
+  if (!exports || typeof exports !== "object") return null
+  const keys = Object.keys(exports)
+  return keys.length && !keys.some((key) => key.startsWith("."))
+    ? { ".": exports }
+    : exports
+}
+
 // Through an exports/imports map, longest key first.
-function mapSubpath(map: Record<string, any>, subpath: string) {
+function mapSubpath(
+  map: Record<string, any>,
+  subpath: string,
+  stylesheet = false
+) {
   const keys = Object.keys(map)
     .filter((key) => key.startsWith(".") || key.startsWith("#"))
     .sort((a, b) => b.length - a.length)
@@ -222,7 +257,7 @@ function mapSubpath(map: Record<string, any>, subpath: string) {
   for (const key of keys) {
     const captured = matchPattern(key, subpath)
     if (captured === null) continue
-    const target = pickTarget(map[key])
+    const target = pickTarget(map[key], stylesheet)
     if (target) out.push(expand(target, captured))
   }
   return out
@@ -255,6 +290,9 @@ function splitPackageSpecifier(spec: string) {
 
 type ResolveOptions = {
   skipPaths?: boolean
+  // An @import in a stylesheet: a package's `style` export, not its
+  // JavaScript.
+  stylesheet?: boolean
 }
 
 // In priority order, before extension probing. `rootDir` is the project
@@ -288,14 +326,15 @@ export function candidatesFor(
       }
     }
   }
+  const { stylesheet } = options
   if (spec.startsWith("#")) {
     const imports = readPackageJson(rootDir)?.imports
     if (imports && typeof imports === "object") {
-      for (const target of mapSubpath(imports, spec)) {
+      for (const target of mapSubpath(imports, spec, stylesheet)) {
         out.push(path.resolve(rootDir, target))
       }
       // A directory alias against a wildcard key ("#components/*").
-      for (const target of mapSubpath(imports, `${spec}/*`)) {
+      for (const target of mapSubpath(imports, `${spec}/*`, stylesheet)) {
         out.push(path.dirname(path.resolve(rootDir, target)))
       }
     }
@@ -322,15 +361,28 @@ export function candidatesFor(
     packageDirectory(pkg.name, fromDir)
   if (!dir) return out
   const subpath = pkg.subpath ? `./${pkg.subpath}` : "."
-  const exportsMap = readPackageJson(dir)?.exports
+  const manifest = readPackageJson(dir)
+  const exportsMap = stylesheet
+    ? stylesheetExports(manifest?.exports)
+    : manifest?.exports
   if (exportsMap && typeof exportsMap === "object") {
-    for (const target of mapSubpath(exportsMap, subpath)) {
+    for (const target of mapSubpath(exportsMap, subpath, stylesheet)) {
       out.push(path.resolve(dir, target))
     }
     // A directory alias against a wildcard key ("./components/*").
-    for (const target of mapSubpath(exportsMap, `${subpath}/*`)) {
+    for (const target of mapSubpath(exportsMap, `${subpath}/*`, stylesheet)) {
       out.push(path.dirname(path.resolve(dir, target)))
     }
+  }
+  // Tailwind's mainFields: a package without exports names its CSS in
+  // `style`, as primeicons does.
+  if (
+    stylesheet &&
+    !pkg.subpath &&
+    manifest?.exports == null &&
+    typeof manifest?.style === "string"
+  ) {
+    out.push(path.resolve(dir, manifest.style))
   }
   if (pkg.subpath) {
     out.push(path.join(dir, pkg.subpath))
@@ -390,7 +442,7 @@ export function resolveFile(
   extensions = EXTENSIONS,
   options: ResolveOptions = {}
 ) {
-  const key = `resolve:${fromDir}|${rootDir}|${spec}|${extensions.join(",")}|${options.skipPaths ? 1 : 0}`
+  const key = `resolve:${fromDir}|${rootDir}|${spec}|${extensions.join(",")}|${options.skipPaths ? 1 : 0}|${options.stylesheet ? 1 : 0}`
   return memoize(key, () =>
     resolveFileUncached(spec, fromDir, rootDir, extensions, options)
   )
