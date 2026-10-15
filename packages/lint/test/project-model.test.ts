@@ -122,7 +122,13 @@ describe("a stylesheet's package import", () => {
   }
   const css = (spec: string) => {
     const found = resolveFile(spec, root, root, [".css"], { stylesheet: true })
-    return found && path.relative(fs.realpathSync(root), found)
+    return (
+      found &&
+      path
+        .relative(fs.realpathSync.native(root), found)
+        .split(path.sep)
+        .join("/")
+    )
   }
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "shadcn-lint-css-imports-"))

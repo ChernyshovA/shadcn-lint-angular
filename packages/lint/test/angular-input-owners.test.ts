@@ -481,7 +481,7 @@ describe("the .d.ts read", () => {
       contracts("/^mat-/")
     )
     const read = declarationFilesReadForTests().map((file) =>
-      path.relative(LIBRARIES, file)
+      path.relative(LIBRARIES, file).split(path.sep).join("/")
     )
     expect(read).toEqual(
       expect.arrayContaining([

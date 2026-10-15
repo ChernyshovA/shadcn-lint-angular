@@ -515,7 +515,9 @@ describe("the modules read", () => {
 
   it("are those of the directives on an element a contract judges", () => {
     const read = () =>
-      scriptFilesReadForTests().map((file) => path.relative(LIBRARIES, file))
+      scriptFilesReadForTests().map((file) =>
+        path.relative(LIBRARIES, file).split(path.sep).join("/")
+      )
     findings(
       `<div pTooltip="Info" class="bg-pink-500"></div><button pButton></button>`,
       contracts("/^brn/")

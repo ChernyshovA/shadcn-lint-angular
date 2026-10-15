@@ -30,6 +30,8 @@ const PROJECT = path.resolve(
 )
 const TEMPLATE = path.join(PROJECT, "src/app/card.component.html")
 const FIXTURES_DIR = path.dirname(PROJECT)
+// Messages name files with forward slashes on Windows too.
+const posix = (file: string) => file.split(path.sep).join("/")
 
 // The rules a static class or style attribute reaches.
 const RULES = {
@@ -1142,7 +1144,7 @@ describe("Angular templates", () => {
       })
       afterEach(() => setWarningSink((message) => console.warn(message)))
 
-      const where = path.relative(process.cwd(), COMPONENT)
+      const where = posix(path.relative(process.cwd(), COMPONENT))
       const warned = (reason: string) =>
         `[shadcn-lint-angular] The host of HostComponent in ${where} cannot be read: ${reason}. The classes and styles it binds there are not checked.`
 
@@ -1790,11 +1792,11 @@ describe("Angular templates", () => {
             (w) => w.includes("nx.json") || w.includes("project.json")
           )
         ).toEqual([
-          `[shadcn-lint-angular] ${path.join(nx, "nx.json")} has fields that are not read, since they are not what Angular takes there: apps/a/project.json (not a JSON object).`,
+          `[shadcn-lint-angular] ${posix(path.join(nx, "nx.json"))} has fields that are not read, since they are not what Angular takes there: apps/a/project.json (not a JSON object).`,
         ])
         expect(warnings.filter((w) => w.includes("angular.json"))).toEqual([
-          `[shadcn-lint-angular] ${path.join(fields, "angular.json")} has fields that are not read, since they are not what Angular takes there: projects.bad.root (not a string), projects.odd.architect (not an object), projects.list.architect.build.options.styles (not a list), projects.nil (not an object), projects.good.architect.build.options.styles[1] (not a path or { input }), projects.good.architect.build.options.styles[2] (not a path or { input }), projects.good.architect.build.options.stylePreprocessorOptions.includePaths[0] (not a string).`,
-          `[shadcn-lint-angular] ${path.join(broken, "angular.json")} cannot be read: it is not a JSON object. The global styles it names are not read.`,
+          `[shadcn-lint-angular] ${posix(path.join(fields, "angular.json"))} has fields that are not read, since they are not what Angular takes there: projects.bad.root (not a string), projects.odd.architect (not an object), projects.list.architect.build.options.styles (not a list), projects.nil (not an object), projects.good.architect.build.options.styles[1] (not a path or { input }), projects.good.architect.build.options.styles[2] (not a path or { input }), projects.good.architect.build.options.stylePreprocessorOptions.includePaths[0] (not a string).`,
+          `[shadcn-lint-angular] ${posix(path.join(broken, "angular.json"))} cannot be read: it is not a JSON object. The global styles it names are not read.`,
         ])
       } finally {
         for (const dir of [fields, broken, nx])
@@ -1986,7 +1988,7 @@ describe("Angular templates", () => {
         unknown("libs/a/b/c/d/e/f/src/page.html", "zz")
         unknown("libs/a/b/c/d/e/f/src/other.html", "zz")
         expect(warnings).toEqual([
-          `[shadcn-lint-angular] ${path.join(dir, "libs/a/b/c/d/e/f/project.json")} is more than 5 directories below ${path.join(dir, "nx.json")}, past where an Nx workspace is read, so the global styles its project names are not read.`,
+          `[shadcn-lint-angular] ${posix(path.join(dir, "libs/a/b/c/d/e/f/project.json"))} is more than 5 directories below ${posix(path.join(dir, "nx.json"))}, past where an Nx workspace is read, so the global styles its project names are not read.`,
         ])
         // A deep directory with no project.json in it says nothing.
         warnings.length = 0
@@ -2004,7 +2006,7 @@ describe("Angular templates", () => {
         warnings.length = 0
         unknown("libs/p000/src/page.html", "zz")
         expect(warnings).toEqual([
-          `[shadcn-lint-angular] ${path.join(dir, "nx.json")} is an Nx workspace with more than 500 project.json files. Those past the first 500 are not read, nor the global styles their projects name.`,
+          `[shadcn-lint-angular] ${posix(path.join(dir, "nx.json"))} is an Nx workspace with more than 500 project.json files. Those past the first 500 are not read, nor the global styles their projects name.`,
         ])
       })
     })
