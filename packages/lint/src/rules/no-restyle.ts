@@ -102,9 +102,7 @@ export const noRestyle = {
               additionalProperties: false,
             },
           },
-          // An Angular element whose names match several contracts takes
-          // a class any of them allows, or with "all" only one every one
-          // allows.
+          // Several contracts on an Angular element: any or all must allow.
           multipleContracts: { enum: ["any", "all"] },
         },
         additionalProperties: false,
@@ -238,14 +236,12 @@ export type Subject = {
   // each with the file a new one goes in.
   read: () => {
     known: boolean
-    // A directive compiled into a library, which defines its variants.
     compiled?: boolean
     variants: { file: string | null; names: string[] | null }
     sizes: { file: string | null; names: string[] | null }
   }
 }
 
-// A site on a component is judged by the component's contract.
 function componentJudge(
   site: ClassSite,
   contracts: ReturnType<typeof compileContracts>,
@@ -274,12 +270,10 @@ function componentJudge(
   }
 }
 
-// What a subject's findings share, read on its first one.
 function readSubject(subject: Subject, context: any) {
   const { known, compiled, variants, sizes } = subject.read()
-  // The file a message sends a new variant or size to. A package
-  // recognized through componentImports is read for its variants, but no
-  // message sends anyone into node_modules to add one.
+  // A package recognized through componentImports is read for its
+  // variants, but no message sends anyone into node_modules to add one.
   const at = (file: string | null) => {
     const shown = file && !NODE_MODULES.test(file) ? file : null
     const where = shown ? shownPath(shown, context) : ""

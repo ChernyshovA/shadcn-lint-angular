@@ -1,15 +1,12 @@
-// Angular code: a template, in an .html file or inline; a script that
-// imports Angular; and any other script of an Angular project, a barrel
-// or a helper of its components, which imports nothing from Angular
-// itself (project/angular-workspace.ts). What this plugin reads the
-// Angular way it reads only there, so a React, Vue or Svelte file, and
-// any file outside an Angular project, lints as it does without it.
+// Angular code: a template, a script importing `@angular/`, or any other
+// script inside an Angular project, such as a barrel or a helper. Only it
+// is read the Angular way, so React, Vue and Svelte files, and files
+// outside an Angular project, lint as they would without Angular support.
 
 import { inAngularProject } from "../../project/angular-workspace"
 
 const scripts = new WeakMap<object, boolean>()
 
-// Whether a program imports from an `@angular/` package.
 export function importsAngular(program: any): boolean {
   return (program.body ?? []).some(
     (statement: any) =>
@@ -19,12 +16,10 @@ export function importsAngular(program: any): boolean {
   )
 }
 
-// A component file of another framework, by its name: React's, Vue's or
-// Svelte's is theirs inside an Angular project too.
+// Another framework's component file stays its own inside an Angular project.
 const COMPONENT_FILE = /\.(?:[jt]sx|vue|svelte|astro|mdx)$/i
 
-// A script of an Angular project. What the linter names when it is given
-// no file, `<input>`, lies in none.
+// `<input>`, the name of text linted with no file, lies in no project.
 function isProjectScript(context: any) {
   const file: string = context.physicalFilename ?? context.getFilename?.() ?? ""
   if (!file || file.startsWith("<") || COMPONENT_FILE.test(file)) {

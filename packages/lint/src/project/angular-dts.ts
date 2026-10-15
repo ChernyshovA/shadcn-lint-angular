@@ -1,6 +1,6 @@
-// What an Angular library's .d.ts says about its classes, read the way
-// ngtsc's DtsMetadataReader reads it (@angular/compiler-cli,
-// src/ngtsc/metadata/src/dts.ts and util.ts), from the syntax alone. A
+// What an Angular library's .d.ts says about its classes, read from the
+// syntax alone the way ngtsc's DtsMetadataReader reads it
+// (@angular/compiler-cli, src/ngtsc/metadata/src/dts.ts and util.ts). A
 // compiled class carries its metadata as the type of a static field:
 //
 //   static ɵdir: i0.ɵɵDirectiveDeclaration<MatTooltip, "[matTooltip]",
@@ -9,13 +9,8 @@
 //   static ɵmod: i0.ɵɵNgModuleDeclaration<MatTooltipModule, never,
 //     [typeof A11yModule, …], [typeof MatTooltip, …]>;
 //
-// Angular 19 to 22 write nine type arguments for a directive or a
-// component and four for a module, inputs as `{ alias; required; }`.
-// Only what a template's elements need is kept of a file: selectors,
-// whether a class is a component, the public names of its inputs, a
-// module's declarations, imports and exports. The parse tree goes at
-// once, since an editor's ESLint server outlives many runs; what is kept
-// is read again when the package's version or the file changes.
+// Only a summary of each file is kept, never its parse tree: an editor's
+// ESLint server outlives many runs.
 
 import * as fs from "node:fs"
 import * as path from "node:path"
@@ -26,27 +21,24 @@ import { readJsonc } from "./resolve"
 import { warnOnce } from "./warn"
 
 // `typeof X`, or `typeof i1.X` through a namespace import.
-export type TypeRef = { name: string; member: string | null }
+type TypeRef = { name: string; member: string | null }
 
 // The entry point a library's class was reached through, as ngtsc's
-// Reference.bestGuessOwningModule: the bare specifier last followed, the
-// file it was resolved from, and the name the class is exported under
-// there when an export led to it. A package splits its .d.ts and its
-// bundles into chunks of their own, so its JavaScript is found through
-// this, not beside the .d.ts (angular-partial.ts).
+// Reference.bestGuessOwningModule: the bare specifier, the file it was
+// resolved from, and the class's exported name there if known. Its
+// JavaScript is found through this: a package chunks its .d.ts and its
+// bundles differently.
 export type Owner = { spec: string; from: string; name: string | null }
 
-export type DtsDirective = {
+type DtsDirective = {
   component: boolean
-  // Null for `never`, no selector; undefined for a type that is no
-  // string, which this cannot read.
+  // Null for `never`, no selector; undefined for a type this cannot read.
   selector: string | null | undefined
-  // The public names of its own inputs and of those its host directives
-  // expose on it.
+  // Public names, with those its host directives expose on it.
   inputs: string[]
 }
 
-export type DtsModule = {
+type DtsModule = {
   declarations: TypeRef[]
   imports: TypeRef[]
   exports: TypeRef[]
@@ -104,8 +96,7 @@ function keyOf(member: any): string | null {
   return typeof key?.value === "string" ? key.value : null
 }
 
-// ngtsc's readMapType: a type literal's properties, each through
-// `transform`, those it cannot read left out.
+// ngtsc's readMapType.
 function readMapType<T>(type: any, transform: (type: any) => T | null) {
   const out = new Map<string, T>()
   if (type?.type !== "TSTypeLiteral") return out
@@ -245,8 +236,6 @@ function nameOf(node: any): string | null {
   return typeof node?.value === "string" ? node.value : null
 }
 
-// What a declaration file holds, and how many of its component,
-// directive and module declarations it read.
 function extract(program: any) {
   const file: DtsFile = {
     imports: new Map(),
@@ -341,15 +330,13 @@ function extract(program: any) {
   return { file, read }
 }
 
-// A compiled class's metadata field: `static ɵcmp:`, `static ɵdir:` or
-// `static ɵmod:`. Not the types of those fields, which @angular/core
-// defines, nor `static ɵcmp = defineComponent(…)` in its doc comments.
+// The fields only: not the ɵɵ…Declaration types @angular/core defines,
+// nor `static ɵcmp = defineComponent(…)` in its doc comments.
 const DECLARATIONS = /\bstatic\s+ɵ(?:cmp|dir|mod)\s*:/g
 
 export type Package = { dir: string; name: string; version: string | null }
 
-// The installed package a file is part of: the directory under its last
-// node_modules.
+// The installed package: the directory under a file's last node_modules.
 export function packageOf(file: string): Package | null {
   const parts = file.split(/[\\/]/)
   const at = parts.lastIndexOf("node_modules")
@@ -384,10 +371,9 @@ const files = new Map<
   { version: string | null; mtimeMs: number; file: DtsFile | null }
 >()
 
-// A declaration file as extracted, once per version of its package and
-// mtime. One that names components, directives or modules none of which
-// can be read is said once per package: a later Angular may write them
-// otherwise.
+// Read again when the package's version or the file's mtime changes.
+// Declarations none of which can be read are said once per package: a
+// later Angular may write them otherwise.
 function dtsFile(file: string): DtsFile | null {
   const mtimeMs = mtimeOf(file)
   if (mtimeMs === null) return null
@@ -425,19 +411,16 @@ function dtsFile(file: string): DtsFile | null {
   return kept
 }
 
-// The declaration files read so far, for tests: only those a template's
-// component reaches through its imports are.
 export function declarationFilesReadForTests() {
   return [...files.keys()]
 }
 
-// Forgets every declaration file read, for a test of what one run reads.
 export function resetDeclarationFilesForTests() {
   files.clear()
 }
 
-// A declaration file for a path a specifier names: `./x.js` is
-// `./x.d.ts`, `./x.d.js` is `./x.d.d.ts`, `./x` may be `./x/index.d.ts`.
+// `./x.js` is `./x.d.ts`, `./x.mjs` is `./x.d.mts`, `./x` may be
+// `./x/index.d.ts`.
 function declarationFile(base: string) {
   const candidates: string[] = []
   const script = /\.([cm]?)js$/.exec(base)
@@ -471,8 +454,6 @@ function typesTarget(value: any): string | null {
   return null
 }
 
-// The target an `exports` map gives a subpath, by `pick` among its
-// conditions.
 export function exportsTarget(
   exports: any,
   subpath: string,
@@ -529,7 +510,6 @@ function typesEntry(dir: string, subpath: string) {
   return declarationFile(subpath ? at : path.join(dir, "index"))
 }
 
-// The declaration file a specifier in `fromFile` names.
 export function resolveDts(spec: string, fromFile: string): string | null {
   const dir = path.dirname(fromFile)
   return memoize(`angular-dts:resolve:${dir}\u0000${spec}`, () => {
@@ -547,8 +527,6 @@ export function resolveDts(spec: string, fromFile: string): string | null {
   })
 }
 
-// A class a declaration file has, or the tuple of classes a constant
-// holds.
 export type DtsValue =
   | {
       kind: "class"
@@ -561,13 +539,11 @@ export type DtsValue =
 
 const MAX_DEPTH = 16
 
-// A specifier that names a package, not a file.
 function isBare(spec: string) {
   return !spec.startsWith(".") && !path.isAbsolute(spec)
 }
 
-// The owner past a specifier `file` follows: a package's entry point for
-// a bare one, the same for a relative one.
+// A relative specifier stays inside the entry point already reached.
 function ownerPast(
   spec: string,
   file: string,
@@ -577,9 +553,8 @@ function ownerPast(
   return isBare(spec) ? { spec, from: file, name } : owner
 }
 
-// Whether a walk through declaration files has been at a file for a
-// name before: `export *` that loop back, or meet again, give nothing
-// the first visit did not.
+// `export *` that loop back, or meet again, give nothing the first visit
+// to a file for a name did not.
 function visited(seen: Set<string>, kind: string, file: string, name: string) {
   const key = `${kind}\u0000${file}\u0000${name}`
   if (seen.has(key)) return true
@@ -587,9 +562,8 @@ function visited(seen: Set<string>, kind: string, file: string, name: string) {
   return false
 }
 
-// What a declaration file exports under `name`, followed through its
-// re-exports, each file once for a name. `deps` collects the files read;
-// `owner` is the entry point the file was reached through.
+// What a declaration file exports under `name`, through its re-exports.
+// `deps` collects the files read.
 export function dtsExport(
   file: string,
   name: string,
@@ -636,8 +610,7 @@ export function dtsExport(
   return null
 }
 
-// What a name in a declaration file stands for there: a class or a
-// constant it declares, or one it imports.
+// A class or a constant a declaration file declares or imports.
 export function dtsLocal(
   file: string,
   name: string,
@@ -669,9 +642,8 @@ export function dtsLocal(
     : null
 }
 
-// What `typeof X` or `typeof i1.X` in a declaration file refers to. A
-// module's exports and a constant's classes are exported from the entry
-// point the module or the constant was, under names not known here.
+// What `typeof X` or `typeof i1.X` refers to. A module's exports and a
+// constant's classes keep its entry point, not its exported name.
 export function dtsRef(
   file: string,
   ref: TypeRef,

@@ -2,8 +2,7 @@
 // directives put on their element, read from the partial declarations
 // the Angular linker reads: the ɵɵngDeclareDirective and
 // ɵɵngDeclareComponent calls in its bundles, with their `host`,
-// `hostDirectives` and `usesInheritance`. A directive that puts no class
-// on its element leaves an element it alone names to be a plain one.
+// `hostDirectives` and `usesInheritance`.
 
 import * as fs from "node:fs"
 import * as os from "node:os"
@@ -35,7 +34,6 @@ const contracts = (...patterns: string[]) => ({
   contracts: patterns.map((pattern) => ({ pattern })),
 })
 
-// Each finding as the class and the element it names.
 const findings = (code: string, options: unknown, cwd = LIBRARIES) =>
   new Linter({ cwd })
     .verify(
@@ -126,8 +124,6 @@ describe("a library's directive on an element", () => {
     ).toEqual([])
   })
 
-  // A broad pattern over PrimeNG 22.1: pTooltip and pStyleClass put
-  // nothing on their element, pButton binds its class.
   it("reads PrimeNG's tooltip as one that styles nothing, its button as one that does", () => {
     expect(
       findings(
@@ -229,7 +225,7 @@ describe("a library's JavaScript whose declarations cannot be read", () => {
     ])
     // A package without its JavaScript is said nothing of.
     expect(warnings).toEqual([
-      "[@shadcn/lint] The Angular declarations in torn-kit 1.0.0 cannot be read: fesm2022/torn-kit.mjs has 1, none of them in the form the linker of Angular 22 reads. Until they can be, shadcn/no-restyle takes its directives for ones that may style their element, as it does without the package's JavaScript.",
+      "[shadcn-lint-angular] The Angular declarations in torn-kit 1.0.0 cannot be read: fesm2022/torn-kit.mjs has 1, none of them in the form the linker of Angular 22 reads. Until they can be, shadcn/no-restyle takes its directives for ones that may style their element, as it does without the package's JavaScript.",
       expect.stringContaining(
         "The Angular declarations in future-kit 1.0.0 cannot be read: fesm2022/future-kit.mjs has 1,"
       ),
@@ -237,7 +233,6 @@ describe("a library's JavaScript whose declarations cannot be read", () => {
   })
 })
 
-// The forms a declaration takes, written into a library of its own.
 describe("the forms of a partial declaration", () => {
   let root: string
   // What is kept of a file is read again for a new mtime: each rewrite

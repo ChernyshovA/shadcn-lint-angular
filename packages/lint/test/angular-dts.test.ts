@@ -156,8 +156,7 @@ describe("the forms of a declaration file", () => {
     })
   })
 
-  // ng-packagr before it bundled them: `export declare class` in a file
-  // of its own, behind `export *`.
+  // As ng-packagr wrote them before it bundled them.
   it("reads a declaration in a file of its own, behind export *", () => {
     expect(read("split-kit", "SplitChip")?.directive).toEqual({
       component: true,
@@ -214,7 +213,7 @@ describe("a .d.ts whose declarations cannot be read", () => {
     read("broken-kit", "BrokenModule")
     expect(read("garbled-kit", "GarbledCard")).toBeNull()
     expect(warnings).toEqual([
-      "[@shadcn/lint] The Angular declarations in broken-kit 99.0.0 cannot be read: index.d.ts has 2, none of them in the form Angular 19 to 22 write. Until they can be, shadcn/no-restyle judges a *Class input on an element by the contract of its tag, as it does without the package installed.",
+      "[shadcn-lint-angular] The Angular declarations in broken-kit 99.0.0 cannot be read: index.d.ts has 2, none of them in the form Angular 19 to 22 write. Until they can be, shadcn/no-restyle judges a *Class input on an element by the contract of its tag, as it does without the package installed.",
       expect.stringContaining(
         "The Angular declarations in garbled-kit 1.0.0 cannot be read: index.d.ts has 1,"
       ),
@@ -229,8 +228,7 @@ describe("a .d.ts whose declarations cannot be read", () => {
   })
 })
 
-// A long-lived ESLint server sees a library change under it: what a file
-// says is read again for a new version of its package or a new mtime.
+// A long-lived ESLint server sees a library change under it.
 describe("the declarations kept of a .d.ts", () => {
   let root: string
   const write = (name: string, text: string, at = Date.now()) => {

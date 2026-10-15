@@ -230,10 +230,8 @@ describe("Angular templates", () => {
   })
 
   it("reports in an inline template without a suggestion that would land elsewhere in the .ts", () => {
-    // The processor `ng add angular-eslint` configures lints each inline
-    // template as a file of its own and moves findings and fixes back into
-    // the .ts, but not suggestions: applied, one would rewrite the top of
-    // the file.
+    // angular-eslint's inline-template processor moves findings and fixes
+    // back into the .ts, but not suggestions.
     const code = [
       `import { Component } from "@angular/core"`,
       "",
@@ -330,7 +328,6 @@ describe("Angular templates", () => {
     )
   })
 
-  // `[style.]` names no property: there is no style to judge.
   it("reads no style from a binding that names no property", () => {
     expect(found(`<div [style.]="tone" [style.color]="'red'"></div>`)).toEqual([
       "shadcn/no-inline-styles: Inline style sets color",
@@ -452,10 +449,9 @@ describe("Angular templates", () => {
       expect(found(code)).toEqual(found(flat))
     })
 
-    // The runtime creates an element only for a tag its sanitizer knows,
-    // with only the attributes it knows (VALID_ELEMENTS and VALID_ATTRS in
-    // @angular/core), names lowercased as the browser parses them. Another
-    // element is dropped with all it holds.
+    // The runtime keeps only the tags and attributes its sanitizer knows
+    // (VALID_ELEMENTS, VALID_ATTRS in @angular/core), lowercased as the
+    // browser parses them; another element is dropped with all it holds.
     it("are only those the i18n runtime creates, with the attributes it keeps", () => {
       expect(
         found(
@@ -519,8 +515,6 @@ describe("Angular templates", () => {
       )
     })
 
-    // The class is looked for where the binding is blanked, so one the
-    // binding also names is rewritten where it is a class.
     it("rewrite a class, not the binding that names it too", () => {
       const applied = (value: string) => {
         const code = `<p>{n, plural, =0 {<span class="${value}">a</span>} other {x}}</p>`
@@ -560,8 +554,6 @@ describe("Angular templates", () => {
       )
     })
 
-    // Against a reference that splices the replacement into the source at
-    // the class's place, over random classes, replacements and bindings.
     it("rewrite only the class, whatever the binding, class and replacement", () => {
       let seed = 0x9e3779b9
       const random = () => {
@@ -1140,8 +1132,7 @@ describe("Angular templates", () => {
       ])
     })
 
-    // What `host` holds that is not written out may bind any class: the
-    // rules that read it say so once for the component.
+    // What `host` holds that is not written out may bind any class.
     describe("a host that cannot be read", () => {
       let warnings: string[] = []
       beforeEach(() => {
@@ -1153,7 +1144,7 @@ describe("Angular templates", () => {
 
       const where = path.relative(process.cwd(), COMPONENT)
       const warned = (reason: string) =>
-        `[@shadcn/lint] The host of HostComponent in ${where} cannot be read: ${reason}. The classes and styles it binds there are not checked.`
+        `[shadcn-lint-angular] The host of HostComponent in ${where} cannot be read: ${reason}. The classes and styles it binds there are not checked.`
 
       it("says so once for a host that is not an object written out", () => {
         const code = [
@@ -1228,7 +1219,7 @@ describe("Angular templates", () => {
           `shadcn/no-inline-styles: "tone"`,
         ])
         expect(warnings).toEqual([
-          "[@shadcn/lint] Host binding values such as `[class]` and `[style.color]` in @Component and @Directive are read with @angular-eslint/bundled-angular-compiler, which angular-eslint installs. It could not be loaded, so they are not checked; the class or style property a key names, as in `[class.active]`, still is. Install angular-eslint.",
+          "[shadcn-lint-angular] Host binding values such as `[class]` and `[style.color]` in @Component and @Directive are read with @angular-eslint/bundled-angular-compiler, which angular-eslint installs. It could not be loaded, so they are not checked; the class or style property a key names, as in `[class.active]`, still is. Install angular-eslint.",
         ])
       })
 
@@ -1469,7 +1460,7 @@ describe("Angular templates", () => {
             unknown(`<ul class="list-other"></ul>`, "list-opaque.html")
           ).toEqual([])
           expect(warnings).toEqual([
-            "[@shadcn/lint] The styles of ListOpaque in src/app/list.ts cannot be read: styles holds `shared`, not a string. shadcn/no-unknown-classes is skipped in its template and in the classes of its element in others, since any class there may be one they declare.",
+            "[shadcn-lint-angular] The styles of ListOpaque in src/app/list.ts cannot be read: styles holds `shared`, not a string. shadcn/no-unknown-classes is skipped in its template and in the classes of its element in others, since any class there may be one they declare.",
           ])
         })
 
@@ -1478,7 +1469,7 @@ describe("Angular templates", () => {
             unknown(`<div class="missing-anything"></div>`, "missing.html")
           ).toEqual([])
           expect(warnings).toEqual([
-            "[@shadcn/lint] The styles of Missing in src/app/missing.ts cannot be read: the stylesheet ./missing.scss does not exist. shadcn/no-unknown-classes is skipped in its template and in the classes of its element in others, since any class there may be one they declare.",
+            "[shadcn-lint-angular] The styles of Missing in src/app/missing.ts cannot be read: the stylesheet ./missing.scss does not exist. shadcn/no-unknown-classes is skipped in its template and in the classes of its element in others, since any class there may be one they declare.",
           ])
         })
 
@@ -1487,7 +1478,7 @@ describe("Angular templates", () => {
             unknown(`<div class="tone-red"></div>`, "generated.html")
           ).toEqual([])
           expect(warnings).toEqual([
-            "[@shadcn/lint] The styles of Generated in src/app/generated.ts cannot be read: the selector `.#{…}` starts with an interpolation in src/app/generated.scss. shadcn/no-unknown-classes is skipped in its template and in the classes of its element in others, since any class there may be one they declare.",
+            "[shadcn-lint-angular] The styles of Generated in src/app/generated.ts cannot be read: the selector `.#{…}` starts with an interpolation in src/app/generated.scss. shadcn/no-unknown-classes is skipped in its template and in the classes of its element in others, since any class there may be one they declare.",
           ])
         })
 
@@ -1511,7 +1502,7 @@ describe("Angular templates", () => {
                 .map((m) => m.message.split('"')[1])
             ).toEqual(["pair-unknown"])
             expect(warnings).toEqual([
-              "[@shadcn/lint] The styles of InlineSpread in src/app/inline-pair.ts cannot be read: the decorator spreads `...base`. shadcn/no-unknown-classes is skipped in its template and in the classes of its element in others, since any class there may be one they declare.",
+              "[shadcn-lint-angular] The styles of InlineSpread in src/app/inline-pair.ts cannot be read: the decorator spreads `...base`. shadcn/no-unknown-classes is skipped in its template and in the classes of its element in others, since any class there may be one they declare.",
             ])
           } finally {
             useParser(null)
@@ -1591,7 +1582,7 @@ describe("Angular templates", () => {
             )
           ).toEqual(["opaque-y"])
           expect(warnings).toEqual([
-            "[@shadcn/lint] The styles of OpaqueComponent in src/app/host/opaque.component.ts cannot be read: styles holds `shared`, not a string. shadcn/no-unknown-classes is skipped in its template and in the classes of its element in others, since any class there may be one they declare.",
+            "[shadcn-lint-angular] The styles of OpaqueComponent in src/app/host/opaque.component.ts cannot be read: styles holds `shared`, not a string. shadcn/no-unknown-classes is skipped in its template and in the classes of its element in others, since any class there may be one they declare.",
           ])
         })
 
@@ -1708,12 +1699,11 @@ describe("Angular templates", () => {
         ).toEqual([])
       }
       expect(warnings).toEqual([
-        "[@shadcn/lint] The global styles angular.json names cannot be read: the stylesheet projects/broken/missing.scss does not exist. shadcn/no-unknown-classes is skipped in this project, since any class may be one they declare.",
+        "[shadcn-lint-angular] The global styles angular.json names cannot be read: the stylesheet projects/broken/missing.scss does not exist. shadcn/no-unknown-classes is skipped in this project, since any class may be one they declare.",
       ])
     })
 
-    // A workspace file is the user's to get wrong: what cannot be read is
-    // skipped and said once, and linting goes on.
+    // A workspace file is the user's to get wrong: linting goes on past it.
     it("skips the fields of a workspace config it cannot read, and says so once", () => {
       const lintIn = (dir: string, file: string) =>
         new Linter({ cwd: dir })
@@ -1800,11 +1790,11 @@ describe("Angular templates", () => {
             (w) => w.includes("nx.json") || w.includes("project.json")
           )
         ).toEqual([
-          `[@shadcn/lint] ${path.join(nx, "nx.json")} has fields that are not read, since they are not what Angular takes there: apps/a/project.json (not a JSON object).`,
+          `[shadcn-lint-angular] ${path.join(nx, "nx.json")} has fields that are not read, since they are not what Angular takes there: apps/a/project.json (not a JSON object).`,
         ])
         expect(warnings.filter((w) => w.includes("angular.json"))).toEqual([
-          `[@shadcn/lint] ${path.join(fields, "angular.json")} has fields that are not read, since they are not what Angular takes there: projects.bad.root (not a string), projects.odd.architect (not an object), projects.list.architect.build.options.styles (not a list), projects.nil (not an object), projects.good.architect.build.options.styles[1] (not a path or { input }), projects.good.architect.build.options.styles[2] (not a path or { input }), projects.good.architect.build.options.stylePreprocessorOptions.includePaths[0] (not a string).`,
-          `[@shadcn/lint] ${path.join(broken, "angular.json")} cannot be read: it is not a JSON object. The global styles it names are not read.`,
+          `[shadcn-lint-angular] ${path.join(fields, "angular.json")} has fields that are not read, since they are not what Angular takes there: projects.bad.root (not a string), projects.odd.architect (not an object), projects.list.architect.build.options.styles (not a list), projects.nil (not an object), projects.good.architect.build.options.styles[1] (not a path or { input }), projects.good.architect.build.options.styles[2] (not a path or { input }), projects.good.architect.build.options.stylePreprocessorOptions.includePaths[0] (not a string).`,
+          `[shadcn-lint-angular] ${path.join(broken, "angular.json")} cannot be read: it is not a JSON object. The global styles it names are not read.`,
         ])
       } finally {
         for (const dir of [fields, broken, nx])
@@ -1899,8 +1889,6 @@ describe("Angular templates", () => {
         expect(warnings).toEqual([])
       })
 
-      // Two Nx applications that name the same stylesheet, which is not
-      // there: each is skipped, and each says so.
       it("reads each project's styles as its own", () => {
         const app = (name: string) => ({
           [`apps/${name}/project.json`]: JSON.stringify({
@@ -1919,13 +1907,12 @@ describe("Angular templates", () => {
         expect(warnings).toEqual(
           ["a", "b"].map(
             (name) =>
-              `[@shadcn/lint] The global styles apps/${name}/project.json names cannot be read: the stylesheet libs/shared/missing.css does not exist. shadcn/no-unknown-classes is skipped in this project, since any class may be one they declare.`
+              `[shadcn-lint-angular] The global styles apps/${name}/project.json names cannot be read: the stylesheet libs/shared/missing.css does not exist. shadcn/no-unknown-classes is skipped in this project, since any class may be one they declare.`
           )
         )
       })
 
-      // A style that names no stylesheet says what it names instead, as
-      // settings.shadcn.entryPoint does.
+      // Worded as for settings.shadcn.entryPoint.
       it.each([
         ["", `an empty path names no stylesheet`],
         ["src/app", `src/app is a directory, not a stylesheet`],
@@ -1943,7 +1930,7 @@ describe("Angular templates", () => {
         warnings.length = 0
         expect(unknown("src/app/page.html", "zz")).toEqual([])
         expect(warnings.filter((w) => w.includes("global styles"))).toEqual([
-          `[@shadcn/lint] The global styles angular.json names cannot be read: ${reason}. shadcn/no-unknown-classes is skipped in this project, since any class may be one they declare.`,
+          `[shadcn-lint-angular] The global styles angular.json names cannot be read: ${reason}. shadcn/no-unknown-classes is skipped in this project, since any class may be one they declare.`,
         ])
       })
 
@@ -1960,7 +1947,7 @@ describe("Angular templates", () => {
         warnings.length = 0
         expect(unknown("src/app/page.component.html", "zz")).toEqual([])
         expect(warnings.filter((w) => w.includes("The styles of"))).toEqual([
-          "[@shadcn/lint] The styles of PageComponent in src/app/page.component.ts cannot be read: ./styles is a directory, not a stylesheet. shadcn/no-unknown-classes is skipped in its template and in the classes of its element in others, since any class there may be one they declare.",
+          "[shadcn-lint-angular] The styles of PageComponent in src/app/page.component.ts cannot be read: ./styles is a directory, not a stylesheet. shadcn/no-unknown-classes is skipped in its template and in the classes of its element in others, since any class there may be one they declare.",
         ])
       })
 
@@ -1981,8 +1968,6 @@ describe("Angular templates", () => {
         expect(warnings).toEqual([])
       })
 
-      // An Nx workspace is scanned for its project.json files to a depth
-      // and a count; what lies past them is not read, and that is said.
       it("says when a project lies past where an Nx workspace is scanned", () => {
         const project = JSON.stringify({
           targets: {
@@ -2001,7 +1986,7 @@ describe("Angular templates", () => {
         unknown("libs/a/b/c/d/e/f/src/page.html", "zz")
         unknown("libs/a/b/c/d/e/f/src/other.html", "zz")
         expect(warnings).toEqual([
-          `[@shadcn/lint] ${path.join(dir, "libs/a/b/c/d/e/f/project.json")} is more than 5 directories below ${path.join(dir, "nx.json")}, past where an Nx workspace is read, so the global styles its project names are not read.`,
+          `[shadcn-lint-angular] ${path.join(dir, "libs/a/b/c/d/e/f/project.json")} is more than 5 directories below ${path.join(dir, "nx.json")}, past where an Nx workspace is read, so the global styles its project names are not read.`,
         ])
         // A deep directory with no project.json in it says nothing.
         warnings.length = 0
@@ -2019,7 +2004,7 @@ describe("Angular templates", () => {
         warnings.length = 0
         unknown("libs/p000/src/page.html", "zz")
         expect(warnings).toEqual([
-          `[@shadcn/lint] ${path.join(dir, "nx.json")} is an Nx workspace with more than 500 project.json files. Those past the first 500 are not read, nor the global styles their projects name.`,
+          `[shadcn-lint-angular] ${path.join(dir, "nx.json")} is an Nx workspace with more than 500 project.json files. Those past the first 500 are not read, nor the global styles their projects name.`,
         ])
       })
     })
@@ -2161,8 +2146,7 @@ describe("Angular templates", () => {
         ])
       })
 
-      // A React file beside it is not styled by Angular's global styles:
-      // its theme is found as upstream finds it.
+      // A React file's theme is found as upstream finds it.
       it("is not the theme of a React file in the workspace", () => {
         const lint = workspace([SPLIT, THEME].join("\n"))
         expect(
@@ -2224,8 +2208,6 @@ describe("Angular templates", () => {
         ])
       })
 
-      // What only Sass reads, Tailwind's compiler reads otherwise: the
-      // entry is found as before, and that is said once.
       it.each([
         [
           `// The app's theme.\n${SPLIT}\n${THEME}`,
@@ -2274,13 +2256,12 @@ describe("Angular templates", () => {
           lint(PAGE)
           lint(`<div></div>`, "src/app/other.html")
           expect(warnings).toEqual([
-            `[@shadcn/lint] src/styles.scss imports Tailwind and holds the theme, but Tailwind's compiler cannot read it as written: ${reason}. The theme is read from src/tailwind.css instead. Import Tailwind and the theme from a CSS file among the styles of angular.json, or set settings.shadcn.entryPoint to one.`,
+            `[shadcn-lint-angular] src/styles.scss imports Tailwind and holds the theme, but Tailwind's compiler cannot read it as written: ${reason}. The theme is read from src/tailwind.css instead. Import Tailwind and the theme from a CSS file among the styles of angular.json, or set settings.shadcn.entryPoint to one.`,
           ])
         }
       )
 
-      // Tailwind builds each global stylesheet on its own: of two that
-      // import it with a theme, the classes are one's or the other's.
+      // Of two that import Tailwind with a theme, the classes come from one.
       it("takes the one that declares the most tokens of several, and says so", () => {
         const lint = workspace(
           `${SPLIT}\n@theme { --color-brand: oklch(0.55 0.2 250); --color-ink: #000; }`
@@ -2294,7 +2275,7 @@ describe("Angular templates", () => {
         )
         lint(`<div></div>`, "src/app/other.html")
         expect(warnings).toEqual([
-          "[@shadcn/lint] src/tailwind.css and src/styles.scss among the styles of angular.json each import Tailwind with a theme, and Tailwind builds each on its own. The theme is read from src/styles.scss, which declares the most tokens. Set settings.shadcn.entryPoint to the one the app's classes come from.",
+          "[shadcn-lint-angular] src/tailwind.css and src/styles.scss among the styles of angular.json each import Tailwind with a theme, and Tailwind builds each on its own. The theme is read from src/styles.scss, which declares the most tokens. Set settings.shadcn.entryPoint to the one the app's classes come from.",
         ])
         warnings.length = 0
         resetWarnings()
@@ -2311,7 +2292,7 @@ describe("Angular templates", () => {
         })
         lint(PAGE)
         expect(warnings).toEqual([
-          "[@shadcn/lint] The theme is read from src/tailwind.css, which holds no @theme, @plugin, @utility or @custom-variant, while src/styles.scss among the styles of angular.json does. Tailwind builds each global stylesheet on its own, so the app's classes come from the one that imports Tailwind with the theme: set settings.shadcn.entryPoint to src/styles.scss.",
+          "[shadcn-lint-angular] The theme is read from src/tailwind.css, which holds no @theme, @plugin, @utility or @custom-variant, while src/styles.scss among the styles of angular.json does. Tailwind builds each global stylesheet on its own, so the app's classes come from the one that imports Tailwind with the theme: set settings.shadcn.entryPoint to src/styles.scss.",
         ])
       })
 
@@ -2387,7 +2368,7 @@ describe("Angular templates", () => {
         ])
         lint("libs/ui/src/card.html")
         expect(warnings).toEqual([
-          "[@shadcn/lint] A project that names no global styles of its own, as a library styled by the apps that use it, takes those of every project in the workspace, and apps/admin/src/styles.css and apps/shop/src/styles.scss among them each import Tailwind with a theme. The theme of its files is read from apps/admin/src/styles.css. Set settings.shadcn.entryPoint to the entry of the app it is built for.",
+          "[shadcn-lint-angular] A project that names no global styles of its own, as a library styled by the apps that use it, takes those of every project in the workspace, and apps/admin/src/styles.css and apps/shop/src/styles.scss among them each import Tailwind with a theme. The theme of its files is read from apps/admin/src/styles.css. Set settings.shadcn.entryPoint to the entry of the app it is built for.",
         ])
         // An app is said nothing of: its own styles hold one theme.
         warnings.length = 0
@@ -2415,7 +2396,7 @@ describe("Angular templates", () => {
         })
         lint(PAGE)
         expect(warnings).toEqual([
-          "[@shadcn/lint] src/styles.scss, the Tailwind entry the settings or components.json name, is read as Tailwind's compiler reads it, as CSS, and it cannot be read so as written: line 4 has a // comment, which only Sass skips. What follows there is misread. Import Tailwind and the theme from a CSS file, and name that instead.",
+          "[shadcn-lint-angular] src/styles.scss, the Tailwind entry the settings or components.json name, is read as Tailwind's compiler reads it, as CSS, and it cannot be read so as written: line 4 has a // comment, which only Sass skips. What follows there is misread. Import Tailwind and the theme from a CSS file, and name that instead.",
         ])
       })
 
@@ -2447,7 +2428,7 @@ describe("Angular templates", () => {
         path.join(FIXTURES, "angular-sass-entry")
       )
       expect(warnings).toEqual([
-        `[@shadcn/lint] src/styles.scss imports Tailwind, but no CSS file under ${where} does, and a Sass file is read as the Tailwind entry only among the global styles of angular.json or project.json, so no-unknown-classes reads classes with the grammar bundled with @shadcn/lint, and the project's theme is not read. Set settings.shadcn.entryPoint to a stylesheet written as CSS that imports Tailwind with the theme.`,
+        `[shadcn-lint-angular] src/styles.scss imports Tailwind, but no CSS file under ${where} does, and a Sass file is read as the Tailwind entry only among the global styles of angular.json or project.json, so no-unknown-classes reads classes with the grammar bundled with shadcn-lint-angular, and the project's theme is not read. Set settings.shadcn.entryPoint to a stylesheet written as CSS that imports Tailwind with the theme.`,
       ])
     })
 
@@ -2492,7 +2473,7 @@ describe("Angular templates", () => {
         path.join(FIXTURES, "angular-no-entry")
       )
       expect(warnings).toEqual([
-        `[@shadcn/lint] No stylesheet importing Tailwind was found under ${where}, so no-unknown-classes reads classes with the grammar bundled with @shadcn/lint, and the project's theme is not read. Set settings.shadcn.entryPoint to the stylesheet that imports Tailwind.`,
+        `[shadcn-lint-angular] No stylesheet importing Tailwind was found under ${where}, so no-unknown-classes reads classes with the grammar bundled with shadcn-lint-angular, and the project's theme is not read. Set settings.shadcn.entryPoint to the stylesheet that imports Tailwind.`,
       ])
     })
 
@@ -2533,8 +2514,8 @@ describe("Angular templates", () => {
       }
       unknownWith(3, `<div></div>`)
       expect(warnings).toEqual([
-        "[@shadcn/lint] settings.shadcn.entryPoint is styles/missing.css, which does not exist. No stylesheet importing Tailwind was found under the project, so no-unknown-classes reads classes with the grammar bundled with @shadcn/lint until the path is fixed.",
-        "[@shadcn/lint] settings.shadcn.entryPoint must be a string; it is ignored.",
+        "[shadcn-lint-angular] settings.shadcn.entryPoint is styles/missing.css, which does not exist. No stylesheet importing Tailwind was found under the project, so no-unknown-classes reads classes with the grammar bundled with shadcn-lint-angular until the path is fixed.",
+        "[shadcn-lint-angular] settings.shadcn.entryPoint must be a string; it is ignored.",
         // Ignored, the setting leaves the project with its Sass entry.
         expect.stringContaining("src/styles.scss imports Tailwind"),
       ])
@@ -2543,18 +2524,17 @@ describe("Angular templates", () => {
     it("says an empty settings.shadcn.entryPoint names no stylesheet", () => {
       unknownWith("", `<div></div>`)
       expect(warnings[0]).toBe(
-        "[@shadcn/lint] settings.shadcn.entryPoint is empty, and an empty path names no stylesheet; it is ignored."
+        "[shadcn-lint-angular] settings.shadcn.entryPoint is empty, and an empty path names no stylesheet; it is ignored."
       )
     })
 
     it("says a directory set as settings.shadcn.entryPoint is one", () => {
       unknownWith("styles", `<div></div>`)
       expect(warnings).toEqual([
-        "[@shadcn/lint] settings.shadcn.entryPoint is styles, which is a directory, not a stylesheet. No stylesheet importing Tailwind was found under the project, so no-unknown-classes reads classes with the grammar bundled with @shadcn/lint until the path is fixed.",
+        "[shadcn-lint-angular] settings.shadcn.entryPoint is styles, which is a directory, not a stylesheet. No stylesheet importing Tailwind was found under the project, so no-unknown-classes reads classes with the grammar bundled with shadcn-lint-angular until the path is fixed.",
       ])
     })
 
-    // A script file: React, or Angular when it imports Angular.
     const REACT = `export const A = () => <div className="flex p-4" />`
     const ANGULAR = `import { Component } from "@angular/core"
       @Component({ selector: "x-a", template: "" })
@@ -2586,7 +2566,7 @@ describe("Angular templates", () => {
         path.join(FIXTURES, "entryless-workspace/packages/a")
       )
       expect(warnings).toEqual([
-        `[@shadcn/lint] No stylesheet importing Tailwind was found under ${where}, so no-unknown-classes reads classes with the grammar bundled with @shadcn/lint, and the project's theme is not read. Set settings.shadcn.entryPoint to the stylesheet that imports Tailwind.`,
+        `[shadcn-lint-angular] No stylesheet importing Tailwind was found under ${where}, so no-unknown-classes reads classes with the grammar bundled with shadcn-lint-angular, and the project's theme is not read. Set settings.shadcn.entryPoint to the stylesheet that imports Tailwind.`,
       ])
     })
 
@@ -2725,8 +2705,6 @@ describe("Angular templates", () => {
         ])
       })
 
-      // `@use "x" with ($font: "Roboto")`: the strings after the URL are
-      // values, not imports.
       it("reads only the URL an @use, @forward or @import names", () => {
         fs.writeFileSync(path.join(dir, "_vars.scss"), `.from-vars { }`)
         fs.writeFileSync(path.join(dir, "_list.scss"), `.from-list { }`)

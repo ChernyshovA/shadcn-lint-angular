@@ -195,9 +195,8 @@ describe("variants from props", () => {
     expect(variantNamesFor(file, "Label")).toBeNull()
   })
 
-  // A class is a scope as a function is in an Angular file, where a
-  // directive's cva is used in its body; a React class component reads as
-  // it does upstream.
+  // In an Angular file a directive's cva is used in its class body, so a
+  // class is a scope there as a function is.
   test("a cva a class uses stands in only in an Angular file", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "shadcn-lint-variants-"))
     const react = path.join(dir, "fancy.tsx")

@@ -148,16 +148,18 @@ See [wrappers](../how-it-works.md#wrappers) and
 
 ## Options
 
-| Option              | Default           | What it does                                                                                                                           |
-| ------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `allow`             | Not set           | Allows categories, class groups, or class patterns.                                                                                    |
-| `deny`              | Not set           | Removes classes from `allow`. Without `allow`, permits everything else.                                                                |
-| `contracts`         | `[]`              | Sets `allow`, `deny`, and `message` for matching components.                                                                           |
-| `message`           | Built-in guidance | Replaces the error text with a string or category-to-message object.                                                                   |
-| `multipleContracts` | `"any"`           | `"all"`: an Angular element several contracts match takes only a class every one allows. See [Angular](../angular.md#component-names). |
+| Option      | Default           | What it does                                                            |
+| ----------- | ----------------- | ----------------------------------------------------------------------- |
+| `allow`     | Not set           | Allows categories, class groups, or class patterns.                     |
+| `deny`      | Not set           | Removes classes from `allow`. Without `allow`, permits everything else. |
+| `contracts` | `[]`              | Sets `allow`, `deny`, and `message` for matching components.            |
+| `message`   | Built-in guidance | Replaces the error text with a string or category-to-message object.    |
 
 The rule also accepts [recognition options](../rules.md#recognition):
 `componentImports`, `ignoreImports`, `mergeFunctions`, and `variantFunctions`.
+In Angular templates it also accepts `multipleContracts`, `"any"` by
+default: with `"all"`, an element several contracts match takes only a
+class every one allows. See [Angular](../angular.md#component-names).
 
 ## Limits
 

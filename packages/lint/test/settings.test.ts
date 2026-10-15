@@ -101,7 +101,7 @@ describe("settings.shadcn.ui", () => {
       lint(NO_JSON, NO_JSON_PAGE, restyle, rules, { shadcn: { ui: 42 } })
     ).toEqual([])
     expect(warnings).toEqual([
-      "[@shadcn/lint] settings.shadcn.ui must be a string or an array of strings; it is ignored.",
+      "[shadcn-lint-angular] settings.shadcn.ui must be a string or an array of strings; it is ignored.",
     ])
   })
 })
@@ -136,8 +136,6 @@ describe("settings.shadcn as shared defaults", () => {
     expect(viaSetting).toEqual(viaOption)
   })
 
-  // Angular code only: a React helper that takes a function stays as
-  // upstream reads it (angular-boundaries.test.ts).
   test("in Angular code, a helper from mergeFunctions reads what a function passed to it returns", () => {
     const code = [
       `import { Directive } from "@angular/core"`,

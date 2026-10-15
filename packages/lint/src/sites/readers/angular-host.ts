@@ -1,12 +1,6 @@
-// `host` in @Component and @Directive is a template for the element the
-// selector matches: `class` and `style` are static attributes, and
-// `[class]`, `[class.x]`, `[style.x]` are bindings whose values are
-// expressions in strings. The compiler parses those to the AST a
-// template binding has, so they are read through the same adapter, with
-// offsets in the string moved to its place in the .ts.
-//
-// A script file is otherwise JSX's, so this reader wraps the JSX one and
-// takes only the properties of a host object.
+// `host` in @Component and @Directive: static `class` and `style`, and
+// bindings whose strings the compiler parses as a template's. A script is
+// otherwise JSX's, so this reader wraps the JSX one.
 
 import * as path from "node:path"
 
@@ -31,7 +25,6 @@ function keyOf(property: any): string | null {
     : null
 }
 
-// The `host` option of `@Component({ host })` or `@Directive({ host })`.
 function isHostOption(host: any) {
   if (host?.type !== "Property" || keyOf(host) !== "host") return false
   const config = host.parent
@@ -46,7 +39,6 @@ function isHostOption(host: any) {
   )
 }
 
-// The object in `@Component({ host: { ... } })`.
 function isHostObject(object: any) {
   const host = object?.parent
   return host?.value === object && isHostOption(host)
@@ -58,9 +50,8 @@ function shown(node: any) {
   return "an expression"
 }
 
-// What `host` holds that is not written out may bind any class or
-// style, so the rules that read it say once for the component that they
-// do not check it there.
+// What `host` holds but does not spell out may bind any class or style:
+// say once per component that it is not checked.
 function warnUnread(host: any, reason: string) {
   const declaration = host?.parent?.parent?.parent?.parent
   const name = declaration?.id?.name ?? "a component"
@@ -97,9 +88,8 @@ function checkHostOption(property: any) {
   }
 }
 
-// What a host key sets, under the name a template attribute would have.
-// Static attributes other than class and style, and property bindings
-// other than these, set nothing this plugin reads.
+// What a host key sets, under the name a template attribute would have;
+// "" for a key that sets nothing this plugin reads.
 function nameOfKey(key: string) {
   if (key === "class" || key === "style") return key
   if (!key.startsWith("[") || !key.endsWith("]")) return ""
@@ -232,8 +222,6 @@ function cookedOffsets(raw: string, template: boolean) {
   return out
 }
 
-// The compiler of the project the file is in. Without it a binding's
-// value stays unread, and that is said once.
 function compilerFor(node: any) {
   const compiler = angularCompiler(fileOfNode(node))
   if (!compiler) {
@@ -352,7 +340,6 @@ export function withHostBindings(reader: TemplateReader): TemplateReader {
       node?.type === "Property"
         ? hostValueOf(node)
         : reader.attributeValue(node),
-    // A binding's key and value are strings the compiler parses.
     sourceStrings: (node) =>
       node?.type === "Property" && hostBindingOf(node)
         ? [node.key, node.value]

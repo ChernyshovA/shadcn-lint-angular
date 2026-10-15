@@ -17,7 +17,7 @@
     "bench:large": "node scripts/bench-large.mjs"
   },
   "dependencies": {
-    "@shadcn/lint": "workspace:*"
+    "@shadcn/lint": "workspace:shadcn-lint-angular@*"
   },
   "devDependencies": {
     "@base-ui/react": "1.7.0",

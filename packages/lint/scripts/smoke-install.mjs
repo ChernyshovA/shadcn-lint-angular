@@ -1,4 +1,4 @@
-// Packs @shadcn/lint the way `npm publish` would, installs the tarball
+// Packs shadcn-lint-angular the way `npm publish` would, installs the tarball
 // into a fresh project outside the workspace, and lints that project
 // with ESLint and with Oxlint. Catches what unit tests cannot: the
 // exports map, the ESM build and its worker, the optional oxc-parser, the copied
@@ -101,12 +101,12 @@ try {
   )
   write(
     "eslint.config.mjs",
-    `import { plugin as shadcn } from "@shadcn/lint"\nimport parser from "@typescript-eslint/parser"\nexport default [\n  { files: ["**/*.tsx"], languageOptions: { parser, parserOptions: { ecmaFeatures: { jsx: true } } }, plugins: { shadcn }, rules: { "shadcn/no-restyle": ["error", { allow: ["layout"] }], "shadcn/no-raw-colors": "error", "shadcn/no-arbitrary-values": "error", "shadcn/no-inline-styles": "error", "shadcn/require-static-classes": "error", "shadcn/no-unknown-classes": "error" } },\n  { files: ["components/ui/**"], rules: { "shadcn/no-restyle": "off", "shadcn/require-static-classes": "off", "shadcn/no-arbitrary-values": "off" } },\n]\n`
+    `import { plugin as shadcn } from "shadcn-lint-angular"\nimport parser from "@typescript-eslint/parser"\nexport default [\n  { files: ["**/*.tsx"], languageOptions: { parser, parserOptions: { ecmaFeatures: { jsx: true } } }, plugins: { shadcn }, rules: { "shadcn/no-restyle": ["error", { allow: ["layout"] }], "shadcn/no-raw-colors": "error", "shadcn/no-arbitrary-values": "error", "shadcn/no-inline-styles": "error", "shadcn/require-static-classes": "error", "shadcn/no-unknown-classes": "error" } },\n  { files: ["components/ui/**"], rules: { "shadcn/no-restyle": "off", "shadcn/require-static-classes": "off", "shadcn/no-arbitrary-values": "off" } },\n]\n`
   )
   write(
     ".oxlintrc.json",
     JSON.stringify({
-      jsPlugins: ["@shadcn/lint"],
+      jsPlugins: ["shadcn-lint-angular"],
       categories: { correctness: "off" },
       rules: {
         "shadcn/no-restyle": ["error", { allow: ["layout"] }],
@@ -132,7 +132,7 @@ try {
   )
   const installed = JSON.parse(
     fs.readFileSync(
-      path.join(dir, "node_modules/@shadcn/lint/package.json"),
+      path.join(dir, "node_modules/shadcn-lint-angular/package.json"),
       "utf-8"
     )
   )
@@ -141,12 +141,12 @@ try {
     process.execPath,
     [
       "-e",
-      `const { createRequire } = require("node:module"); const r = createRequire(require.resolve("@shadcn/lint", { paths: [process.cwd()] })); try { r("oxc-parser"); console.log("oxc") } catch (e) { console.log("none: " + e.message) }`,
+      `const { createRequire } = require("node:module"); const r = createRequire(require.resolve("shadcn-lint-angular", { paths: [process.cwd()] })); try { r("oxc-parser"); console.log("oxc") } catch (e) { console.log("none: " + e.message) }`,
     ],
     { cwd: dir, encoding: "utf-8" }
   )
   expect(
-    `installed @shadcn/lint@${installed.version}; oxc-parser resolves from it`,
+    `installed shadcn-lint-angular@${installed.version}; oxc-parser resolves from it`,
     probe.stdout + probe.stderr,
     /^oxc/
   )

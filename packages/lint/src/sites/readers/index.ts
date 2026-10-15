@@ -12,8 +12,8 @@ import { vueReader } from "./vue"
 
 export type { ElementName, ExtraSite, TemplateReader, Visitors } from "./types"
 
-// A script file that imports Angular can declare a component, whose host
-// bindings are a template of their own.
+// An Angular script can declare a component, whose host bindings are a
+// template of their own.
 const scriptReader = withHostBindings(jsxReader)
 
 const readers = [scriptReader, svelteReader, vueReader, angularReader]
@@ -33,7 +33,6 @@ export function readerFor(context: any) {
 }
 
 // Whether this class attribute takes an object with classes as keys.
-// Elsewhere an object is a classNames map, its values the classes.
 export function keysClasses(
   reader: TemplateReader,
   attribute: any,
@@ -134,6 +133,8 @@ function once(visitors: Visitors, reader: TemplateReader): Visitors {
   return out
 }
 
+const ANGULAR_COMPONENT = /@Component\s*\(/
+
 // What every rule's visitors go through before the linter gets them.
 //
 // Vue's template visitors only run when they are registered through the
@@ -144,10 +145,7 @@ function once(visitors: Visitors, reader: TemplateReader): Visitors {
 //
 // A .svelte or .vue file that arrives without its framework's parser has
 // only its script blocks in the AST (Oxlint does this). Passing quietly
-// would read as "checked", so it says so once. Oxlint parses no Angular
-// template either, .html or inline, and names its parser "oxlint".
-const ANGULAR_COMPONENT = /@Component\s*\(/
-
+// would read as "checked", so it says so once.
 export function withTemplates<T extends { create: (context: any) => any }>(
   rule: T
 ) {

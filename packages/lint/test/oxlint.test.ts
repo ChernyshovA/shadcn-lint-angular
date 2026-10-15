@@ -233,8 +233,6 @@ describe.skipIf(!buildUsable)("oxlint", { timeout: RUN_TIMEOUT }, () => {
     expect(out).toContain("Found 0 warnings and 1 error")
   })
 
-  // Oxlint parses no Angular template, .html or inline: a component file
-  // is linted for its host bindings and class helpers only.
   // Oxlint applies a suggestion at the range the rule gives, as ESLint
   // does: a host binding's lands on the class where the .ts spells it,
   // and a string whose escapes move offsets gets none.

@@ -781,8 +781,7 @@ export function collectClassStrings(
   const valueHelpers =
     options.variantFunctions ?? new Set(DEFAULT_VARIANT_FUNCTIONS)
   const resolve = options.resolve ?? true
-  // spartan's helpers are read as spartan means them only where spartan
-  // can be: in Angular code.
+  // spartan's helpers are read spartan's way only in Angular code.
   const angular = isAngularCode(context)
   const contextualStrings: ClassString[] = []
   const vocabularyStrings: ClassString[] = []

@@ -1,10 +1,6 @@
-// no-restyle in an Angular template. A template imports nothing a tag
-// could be resolved through, so an element is the names on it a
-// contract's pattern matches: its tag, an attribute, a binding. Each
-// name stands for the directive in the template's scope under that
-// selector, and the cva in that directive's file gives the variants, as
-// a .tsx component's does. An input such as styleClass is judged by the
-// contract of the directive that takes it.
+// no-restyle in an Angular template, which imports nothing a tag could be
+// resolved through: an element is the names on it a contract matches, each
+// standing for the directive in scope under it, whose cva gives variants.
 
 import { propertyGroup } from "../grammar/categories"
 import { normalizeClass, OPACITY_MODIFIER } from "../grammar/classes"
@@ -35,22 +31,15 @@ import type { Judge, Subject } from "./no-restyle"
 
 type Contracts = ReturnType<typeof compileContracts>
 
-// What lands on the element itself: `class`, and `[class]`, `[class.x]`,
-// `[ngClass]`, `[attr.class]` and `[className]`, which the reader names
-// `class` (CLASS_BINDING in angular-partial.ts says the same of a
-// directive's host), and
-// the classes NgClass and routerLinkActive add to their element. An
-// input such as styleClass, panelClass or enterActiveClass hands its
-// classes to the directive that takes it, which puts them where it
-// likes: inside its component, or on another element.
+// What lands on the element itself: `class` (the reader's name for
+// `[class]`, `[class.x]`, `[ngClass]`, `[attr.class]`, `[className]`) and
+// what NgClass and routerLinkActive add. An input such as styleClass hands
+// its classes to the directive that takes it, to put where it likes.
 export const ON_ELEMENT = new Set(["class", "ngClass", "routerLinkActive"])
 
-// What a class of the component's own styles may set and still be
-// layout: the properties Tailwind's layout utilities set, those of the
-// groups the grammar gives no appearance category (sr-only's padding and
-// clip-path aside), with the longhands and shorthands that set nothing
-// else. Anything else paints, or the grammar has it in an appearance
-// category, as text-overflow is typography and border-spacing spacing.
+// What a class of the component's own styles may set and still be layout:
+// what the utilities of the grammar's non-appearance groups set (sr-only's
+// padding and clip-path aside); not text-overflow, which is typography.
 const LAYOUT_PROPERTIES = new Set(
   [
     "align-content,align-items,align-self,appearance,aspect-ratio",
@@ -99,9 +88,8 @@ type Named = Subject & {
   styles: boolean
   // Whether a directive the template imports was found for the name.
   found: boolean
-  // Whether a cva gives it variants or sizes, which a message lists. A
-  // cva beside it that gives neither, as HlmTooltip's places the arrow
-  // of the tooltip it opens, is not the element's.
+  // Whether a cva gives it variants or sizes. One that gives neither, as
+  // HlmTooltip's for its tooltip's arrow, is not the element's.
   varies: () => boolean
 }
 
@@ -120,11 +108,9 @@ export function angularRestyle(
     ...(options.mergeFunctions ?? []),
   ])
 
-  // A template's classes are also declared by its component's styles and
-  // the project's global ones, and those on a component's element by the
-  // styles of that component, `:host(.x)`, as no-unknown-classes reads
-  // them. Styles that could not be read declare nothing a message could
-  // name.
+  // Declared by the component's or the global styles, or on a component's
+  // element by its `:host(.x)`, as no-unknown-classes reads them. Unread
+  // styles declare nothing a message could name.
   let styles: OwnClasses[] | undefined
   const declares = (token: string, site: ClassSite) => {
     styles ??= [
@@ -143,12 +129,9 @@ export function angularRestyle(
     return !!host && !host.unread && host.has(base)
   }
 
-  // A class the component's own styles declare is read by what their
-  // rules set, as an @utility is by its body: `.orders-card { max-width:
-  // 40rem }` is layout. Only when every rule it is in sets layout alone,
-  // not a custom property, which the component inside may read, nor what
-  // cannot be read; and not where the global styles declare it too.
-  // Null otherwise: the grammar cannot tell what it changes.
+  // A class of the component's own styles is layout if all its rules set
+  // is, as an @utility is read by its body; not a custom property, which the
+  // component inside may read, nor a class the global styles declare too.
   let own: OwnClasses | undefined
   let global: OwnClasses | null | undefined
   const ownGroupOf = (token: string) => {
@@ -162,7 +145,6 @@ export function angularRestyle(
     return propertyGroup(unprefixed[0] ?? "display")
   }
 
-  // An element with the contracts its names match, or null.
   const judgedElement = (element: any) => {
     const names = reader.contractNames?.(element)
     if (!names) return null
@@ -170,7 +152,6 @@ export function angularRestyle(
     return matched.length ? { tag: names[0], matched } : null
   }
 
-  // The directive a name on an element stands for, or null.
   const directives = new WeakMap<object, Map<string, DirectiveRef | null>>()
   const directiveAt = (element: any, name: string) => {
     let byName = directives.get(element)
@@ -190,11 +171,9 @@ export function angularRestyle(
     return byName.get(name)!
   }
 
-  // A broad pattern also matches directives that only behave: a trigger,
-  // a tooltip. An element whose every matched name stands for one of
-  // those attribute directives is no design-system component. A component
-  // is one, drawn in its own template, and a name no imported directive
-  // stands for may still be one that styles.
+  // A broad pattern also matches directives that only behave (a trigger, a
+  // tooltip): an element only they name is no design-system component. A
+  // component draws itself, and an unresolved name may yet style.
   const plain = new WeakMap<object, boolean>()
   const isPlain = (element: any, matched: readonly ElementIdentity[]) => {
     let known = plain.get(element)
@@ -208,15 +187,12 @@ export function angularRestyle(
     return known
   }
 
-  // An element around another that its contracts judge, or null.
   const judgedAround = (element: any) => {
     const judged = judgedElement(element)
     return judged && !isPlain(element, judged.matched) ? judged : null
   }
 
-  // Where space around an element goes: margin when its own contracts
-  // allow one, and the nearest element around it whose contracts take
-  // the class, judged the way the element is.
+  // As aroundFor in no-restyle.ts; a container is judged as the element is.
   const around = (
     element: any,
     matched: readonly ElementIdentity[],
@@ -254,12 +230,8 @@ export function angularRestyle(
     return phrase(places)
   }
 
-  // Whose an input on an element is, as the names on the element a
-  // contract matches: those of each directive in the template's scope
-  // that declares it, read from the project's sources or a library's
-  // .d.ts. When that cannot be told, the component the tag names takes
-  // it, when a contract matches the tag. A directive no contract
-  // matches judges nothing.
+  // The matched names of the directives in scope that declare an input,
+  // from sources or a library's .d.ts; failing that, the tag's component.
   const owned = new WeakMap<object, Map<string, readonly ElementIdentity[]>>()
   const ownersOf = (
     element: any,
@@ -286,9 +258,6 @@ export function angularRestyle(
     return found
   }
 
-  // Each name on a site's element a contract matches judges the classes
-  // that land on the element itself; an input's, the names of the
-  // directives that take it.
   const judgeOf = (site: ClassSite): Judge | null => {
     const judged = judgedElement(site.element)
     if (!judged) return null
@@ -303,7 +272,6 @@ export function angularRestyle(
       let subject = subjects.get(name)
       if (!subject) {
         const component = shownAs(tag, name)
-        // The directive the name stands for holds the variants.
         const directive = directiveAt(site.element, name)
         let definitions: ReturnType<typeof definitionsOf> | undefined
         const read = () => (definitions ??= definitionsOf(directive))
@@ -331,15 +299,11 @@ export function angularRestyle(
         if (group)
           refused = contracts.decideElement(matched, token, every, group)
       }
-      // An element only directives that style nothing name wears its
-      // classes as a plain one; what it hands an input is the input's.
+      // A plain element's classes pass; an input's are still its owner's.
       if (!refused || (!input && isPlain(site.element, matched))) return null
-      // Named after a directive whose cva gives its variants, hlmBtn
-      // rather than the hlmDropdownMenuTrigger beside it, which styles the
-      // element with the CDK's label and has none; else one that styles
-      // the element, hlmBtn rather than the hlmPopoverTrigger beside it;
-      // else one the template imports, past an input such as
-      // hlmContextMenuTriggerData.
+      // Named after a directive with variants: hlmBtn, not the
+      // hlmDropdownMenuTrigger beside it, which styles the element only with
+      // the CDK's label; else one that styles; else one the template imports.
       const { verdict, name } =
         refused.find((refusal) => subjectOf(refusal.name).varies()) ??
         refused.find((refusal) => subjectOf(refusal.name).styles) ??
@@ -352,9 +316,8 @@ export function angularRestyle(
   return { declares, judgeOf }
 }
 
-// A directive's variants or sizes: those of the cva variants.ts finds for
-// its class, or in a file that declares no other directive, of the first
-// cva in it, as in a single-file component.
+// Those of the cva variants.ts finds for the class, or, in a file that
+// declares no other directive, of its first cva, as for an SFC.
 function axisOf(directive: DirectiveClass, axis: "variant" | "size") {
   const read = axis === "variant" ? variantNamesFor : sizeNamesFor
   const own = read(directive.file, directive.name)
@@ -369,11 +332,9 @@ function axisOf(directive: DirectiveClass, axis: "variant" | "size") {
   return values?.length ? values : null
 }
 
-// Where a directive's variants and sizes are defined: its own cva, else
-// that of a directive it hosts, as spartan's HlmInputGroupButton takes
-// its variants from HlmButton. A message sends a new one to a file that
-// holds a cva, never to one that holds none. A library's class, read
-// from its .d.ts, has none to read.
+// A directive's own cva, else that of one it hosts, as spartan's
+// HlmInputGroupButton takes HlmButton's. A message sends a new variant only
+// to a file that holds a cva; a library's class has none to read.
 function definitionsOf(found: DirectiveRef | null) {
   const directive = found && !found.compiled ? found : null
   const classes = directive ? [directive, ...directive.hosted] : []
@@ -398,8 +359,7 @@ function definitionsOf(found: DirectiveRef | null) {
   }
 }
 
-// An element as a finding names it: `<button hlmBtn>` for a directive,
-// `<p-button>` for a tag.
+// `<button hlmBtn>` for a directive, `<p-button>` for a tag.
 function shownAs(tag: string, name: string) {
   return name === tag ? tag : `${tag} ${name}`
 }

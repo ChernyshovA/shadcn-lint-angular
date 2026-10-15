@@ -1,26 +1,19 @@
-// An Angular binding's value is the compiler's own expression AST:
-// LiteralPrimitive, Conditional, LiteralMap. The walker and the style
-// rules already read the ESTree shapes those mean, so the few that carry
-// classes or styles become ESTree nodes, placed in the source, and every
-// other expression becomes one opaque node the walker reports as
-// unreadable, the way it treats a call it does not know.
-//
-// The template parser hands the AST over already parsed, and a `host`
-// binding parses to the same types, so one adapter serves both. The
-// nodes are built once per expression: every rule sees the same ones.
+// Angular's expression AST, from a template binding or a `host` string,
+// as the ESTree shapes the walker and the style rules already read. Only
+// what carries classes or styles converts; any other expression is one
+// opaque node the walker reports as unreadable, like an unknown call.
 
 export type ExpressionSource = {
   // The file's text from `base` on: all of it for a template, the string
   // literal for a host binding.
   text: string
   base: number
-  // A span offset of the expression to an offset in the file.
+  // `at` moves an offset in the expression's spans into the file; `loc`
+  // takes a file offset to ESLint's line and column.
   at: (offset: number) => number
-  // An offset in the file to ESLint's line and column.
   loc: (offset: number) => { line: number; column: number }
-  // The text the parser read, decoded from the file's from `from` on,
-  // when the two differ. `at` follows the decoding, but an
-  // interpolation's spans do not.
+  // The value as the parser read it, entities decoded, from the file's
+  // offset `from` on; set only when the file spells it otherwise.
   decoded?: { text: string; from: number }
   // A value that cannot be placed: every node spans all of it, and none
   // offers a rewrite.
@@ -40,8 +33,7 @@ const placed = (
   return node
 }
 
-// `[class.active]="on"` adds the class its key names, from `from` to `to`
-// in the file.
+// `[class.active]="on"` adds the class its key names.
 export function classNameNode(
   name: string,
   from: number,
@@ -94,11 +86,11 @@ export function styleObjectNode(
   return object
 }
 
+// Built once per expression, so every rule sees the same nodes.
 const converted = new WeakMap<object, any>()
 
-// The node's own class name: the template parser writes it into `type`,
-// and an expression parsed outside it keeps the compiler's (a pipe's
-// `type` is a number).
+// The template parser writes a node's class name into `type`; one parsed
+// outside it has only its class (and a pipe's `type` is a number).
 function kindOf(ast: any): string {
   return typeof ast?.type === "string"
     ? ast.type
@@ -265,9 +257,8 @@ export function estreeOf(
     return node
   }
 
-  // `class="p-4 {{ tone }}"` is a template literal written in markup: the
-  // text between the braces is its quasis, the bindings its expressions.
-  // Only a template has one, and its spans are the file's own offsets.
+  // `class="p-4 {{ tone }}"`: the text around the braces is the quasis.
+  // Only a template has one, and its spans are offsets in the file.
   const interpolationOf = (ast: any, owner: any) => {
     const node = spanned({ type: "TemplateLiteral" }, ast, owner)
     node.quasis = []

@@ -26,9 +26,8 @@ export type ExtraSite = {
 
 export type TemplateReader = {
   attributes: string[]
-  // Nodes that hold attributes the parser hands over as no nodes of
-  // their own, by node type: Angular's ICU, whose cases' elements only
-  // its i18n message keeps. Each is read as one of `attributes`.
+  // Attributes the parser keeps in no node of their own, by the type of the
+  // node that holds them (Angular's ICU); each is read as an attribute.
   heldAttributes?: Record<string, (node: any) => any[]>
   // Attributes that hold classes under a name of their own, past the
   // class-like names every reader shares.
@@ -57,21 +56,19 @@ export type TemplateReader = {
     string,
     (node: any) => { property: string; value: any } | null
   >
-  // Markup whose `class` takes an object with classes as keys, or the
-  // class attributes that do, by node and name.
+  // Markup whose `class` takes an object with classes as keys.
+  // A function decides per attribute, by node and name.
   classObjects?: boolean | ((attribute: any, name: string) => boolean)
-  // Markup where `style="color: red"` is how a style is written, or the
-  // values where it is. In JSX a string is not a style, and it stays
-  // unread.
+  // Markup where `style="color: red"` is how a style is written. In JSX
+  // a string is not a style, and it stays unread.
+  // A function decides per value, where a script holds a template too.
   staticStyles?: boolean | ((value: any) => boolean)
-  // Node types the traversal can reach more than once. Each rule sees
-  // such a node the first time only.
+  // Node types the traversal can reach more than once.
   revisited?: string[]
   // A template identifier's variable when the parser's scopes stop at
   // the script.
   variableOf?: (node: any, context: any) => any
-  // Markup with no imports to resolve a tag through, where a contract's
-  // pattern names an element by its tag and its attributes instead: the
-  // names, null for no element.
+  // Markup with no imports to resolve a tag through: the names a contract's
+  // pattern can match an element by, its tag and attributes; null for none.
   contractNames?: (element: any) => string[] | null
 }

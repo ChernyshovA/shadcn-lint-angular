@@ -1,21 +1,15 @@
 // What an Angular library's published JavaScript says its directives and
-// components put on their element, read the way the Angular linker reads
-// a partial declaration (@angular/compiler-cli/linker,
-// partial_directive_linker_1 and partial_component_linker_1), from the
-// syntax alone. A library compiled for publishing carries each class's
-// metadata as a call:
+// components put on their element, read from the syntax alone the way the
+// Angular linker reads a partial declaration (@angular/compiler-cli/linker,
+// partial_directive_linker_1 and partial_component_linker_1):
 //
 //   static ɵdir = i0.ɵɵngDeclareDirective({ minVersion: "14.0.0",
 //     version: "22.1.2", type: Ripple, isStandalone: true,
 //     selector: "[pRipple]", host: { classAttribute: "p-ripple" },
 //     usesInheritance: true, ngImport: i0 });
 //
-// Its .d.ts says nothing of `host`; this does. Only what an element needs
-// is kept of a file: each class's selector, whether its host puts a class
-// on the element, the directives it hosts and the class it extends, whose
-// host bindings and host directives it inherits. As for a .d.ts, the
-// parse tree goes at once, and what is kept is read again when the
-// package's version or the file changes.
+// The .d.ts says nothing of `host`; this does. As for a .d.ts, only a
+// summary of each file is kept.
 
 import * as fs from "node:fs"
 import * as path from "node:path"
@@ -31,12 +25,11 @@ type Ref = { name: string; member: string | null }
 
 type Declaration = {
   selector: string | null
-  // Whether its host puts a class on its element: a static class, a
-  // binding of `class` or of one class. Null for a host this cannot read.
+  // Whether its host puts a class on its element; null for a host this
+  // cannot read.
   classes: boolean | null
   // The directives it hosts; null for a list this cannot read.
   hostDirectives: Ref[] | null
-  // Whether it takes what the classes it extends declare.
   inherits: boolean
 }
 
@@ -47,18 +40,17 @@ type JsClass = {
   base: Ref | "dynamic" | null
 }
 
+// As DtsFile in angular-dts.ts.
 type JsFile = {
-  // Local name -> where it is imported from; "*" for a namespace.
   imports: Map<string, { spec: string; name: string }>
-  // Exported name -> its local name, or what it re-exports.
   exports: Map<string, { spec: string | null; name: string }>
   stars: string[]
   classes: Map<string, JsClass>
 }
 
-// The Angular whose linker this reads as. A linker refuses a
-// declaration whose minVersion is newer than itself: that is how a later
-// Angular marks one written in a form an earlier one cannot link.
+// The Angular whose linker this reads as. A linker refuses a declaration
+// whose minVersion is newer than itself: that is how a later Angular
+// marks a form an earlier one cannot link.
 const NEWEST = 22
 
 const DECLARE = new Set(["ɵɵngDeclareDirective", "ɵɵngDeclareComponent"])
@@ -72,11 +64,9 @@ const HOST_KEYS = new Set([
   "styleAttribute",
 ])
 
-// A binding of what lands on the element's class, as a template's
-// element takes it (ON_ELEMENT in angular-restyle.ts): `[class]`,
-// `[class.active]`, `[attr.class]`, or `[className]`, the property the
-// attribute reflects. The host of a directive the project declares
-// counts the same.
+// Host bindings that land on the element's class, in step with
+// ON_ELEMENT in angular-restyle.ts; `className` is the property `class`
+// reflects to.
 export const CLASS_BINDING = /^(?:class(?:\.|$)|attr\.class$|className$)/
 
 const MAX_DEPTH = 16
@@ -86,7 +76,6 @@ function nameOf(node: any): string | null {
   return stringOf(node)
 }
 
-// A string written out.
 function stringOf(node: any): string | null {
   return node?.type === "Literal" && typeof node.value === "string"
     ? node.value
@@ -125,8 +114,7 @@ function hostRefOf(node: any): Ref | null {
     : null
 }
 
-// An object literal's properties by key; null for one a spread or a
-// computed key can add to.
+// Null for an object a spread or a computed key can add to.
 function propertiesOf(node: any): Map<string, any> | null {
   if (node?.type !== "ObjectExpression") return null
   const out = new Map<string, any>()
@@ -139,7 +127,6 @@ function propertiesOf(node: any): Map<string, any> | null {
   return out
 }
 
-// Whether a declaration's `host` puts a class on the element.
 function classesOf(host: any): boolean | null {
   if (host === undefined) return false
   const keys = propertiesOf(host)
@@ -170,10 +157,8 @@ function majorOf(version: any) {
   return major ? Number(major[1]) : null
 }
 
-// A call to ɵɵngDeclareDirective or ɵɵngDeclareComponent as the linker
-// reads it: one object, whose `type` is the class it declares. Null for
-// any other call, and for one whose minVersion the linker of Angular
-// NEWEST refuses.
+// ɵɵngDeclareDirective or ɵɵngDeclareComponent as the linker reads it:
+// one object, whose `type` is the class it declares.
 function declarationOf(
   call: any
 ): { type: string; declaration: Declaration } | null {
@@ -209,7 +194,6 @@ function superOf(node: any): JsClass["base"] {
   return refOf(base) ?? "dynamic"
 }
 
-// What a module holds, and how many of its declarations it read.
 function extract(program: any) {
   const file: JsFile = {
     imports: new Map(),
@@ -321,9 +305,7 @@ const files = new Map<
   { version: string | null; mtimeMs: number; file: JsFile | null }
 >()
 
-// A module as extracted, once per version of its package and mtime. One
-// that holds declarations none of which can be read is said once per
-// package: a later Angular may write them otherwise.
+// As dtsFile in angular-dts.ts.
 function jsFile(file: string): JsFile | null {
   const mtimeMs = mtimeOf(file)
   if (mtimeMs === null) return null
@@ -361,7 +343,6 @@ function jsFile(file: string): JsFile | null {
   return kept
 }
 
-// The modules read so far, for tests.
 export function scriptFilesReadForTests() {
   return [...files.keys()]
 }
@@ -370,8 +351,7 @@ export function resetScriptFilesForTests() {
   files.clear()
 }
 
-// A module for a path a specifier names: `./x.mjs` itself, `./x` with
-// an extension or as a directory's index.
+// `./x.mjs` itself, or `./x` with an extension or as a directory's index.
 function scriptFile(base: string) {
   const candidates = [base]
   for (const ext of [".mjs", ".js"]) candidates.push(`${base}${ext}`)
@@ -432,7 +412,6 @@ function scriptEntry(dir: string, subpath: string) {
     return target ? scriptFile(path.resolve(dir, target)) : null
   }
   const at = subpath ? path.join(dir, subpath) : dir
-  // A secondary entry point before Angular 13 had a package.json of its own.
   const own = subpath ? jsonAt(path.join(at, "package.json")) : manifest
   if (typeof own?.module === "string") {
     const found = scriptFile(path.resolve(at, own.module))
@@ -441,7 +420,6 @@ function scriptEntry(dir: string, subpath: string) {
   return scriptFile(subpath ? at : path.join(dir, "index"))
 }
 
-// The module a specifier in `fromFile` names.
 function resolveScript(spec: string, fromFile: string): string | null {
   const dir = path.dirname(fromFile)
   return memoize(`angular-partial:resolve:${dir}\u0000${spec}`, () => {
@@ -463,9 +441,6 @@ function resolveScript(spec: string, fromFile: string): string | null {
 
 type JsValue = { file: string; cls: JsClass }
 
-// Whether a walk through modules has been at a file for a name before:
-// `export *` that loop back, or meet again, give nothing the first visit
-// did not.
 function visited(seen: Set<string>, kind: string, file: string, name: string) {
   const key = `${kind}\u0000${file}\u0000${name}`
   if (seen.has(key)) return true
@@ -473,8 +448,7 @@ function visited(seen: Set<string>, kind: string, file: string, name: string) {
   return false
 }
 
-// What a module exports under `name`, followed through its re-exports,
-// each module once for a name.
+// As dtsExport and dtsLocal in angular-dts.ts, for a module.
 function scriptExport(
   file: string,
   name: string,
@@ -506,8 +480,6 @@ function scriptExport(
   return null
 }
 
-// The class a name in a module stands for: one it declares, or one it
-// imports.
 function scriptLocal(
   file: string,
   name: string,
@@ -538,20 +510,16 @@ function scriptRef(file: string, ref: Ref, deps: Set<string>) {
   return target ? scriptExport(target, ref.member, deps) : null
 }
 
-// Three-valued or: true when one is, unknown when none is and one is
-// unknown.
+// Three-valued or; null is unknown.
 function either(values: (boolean | null)[]) {
   if (values.includes(true)) return true
   return values.includes(null) ? null : false
 }
 
-// Whether a declared class puts a class on its element: its own host,
-// the directives it hosts, and when it inherits, those of each class up
-// its chain, as ɵɵInheritDefinitionFeature walks the prototype chain past
-// classes Angular does not know and takes each declared one's host
-// bindings and, through ngInherit, its host directives. Each class is
-// read once, however many ways reach it: what it gives is in the answer
-// already.
+// Its own host, the directives it hosts and, when it inherits, those of
+// each class up its chain, as ɵɵInheritDefinitionFeature walks the
+// prototype chain past classes Angular does not know. A class reached
+// again adds nothing: what it gives is in the answer already.
 function stylesOf(
   found: JsValue,
   deps: Set<string>,
@@ -565,7 +533,6 @@ function stylesOf(
   const values: (boolean | null)[] = []
   let at: JsValue | null = found
   for (let up = 0; at; up++) {
-    // A chain that loops back adds nothing more.
     if (up > 0 && seen.has(at.cls)) break
     seen.add(at.cls)
     const { declaration, base } = at.cls
@@ -595,10 +562,9 @@ function spaced(selector: string | null) {
 }
 
 // Whether a library's directive or component puts a class on its
-// element, read from the module of the entry point it was reached
-// through, where its declaration is the one with its name and the
-// selector its .d.ts gives. Null when that, the selector, or what it
-// hosts or inherits, cannot be read. `deps` collects the modules read.
+// element, read from the module of the entry point its .d.ts was reached
+// through; the declaration there must carry the selector the .d.ts gives.
+// Null when anything on the way cannot be read.
 export function compiledStyles(
   owner: Owner,
   name: string,

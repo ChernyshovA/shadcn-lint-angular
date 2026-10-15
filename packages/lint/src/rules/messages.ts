@@ -46,11 +46,9 @@ export function displayPath(file: string, context: any) {
   })
 }
 
-// A path in a message on Angular code. `nx run-many` runs ESLint in each
-// project's directory, so a file of another project lies past it: that
-// one is shown from the root of the workspace, as the projects' own
-// configs write paths. Any other file's path is shown as upstream shows
-// it.
+// `nx run-many` runs ESLint in each project's directory, where a file of
+// another project would show as absolute: on Angular code it is shown from
+// the workspace root, as the projects' own configs write paths.
 export function shownPath(file: string, context: any) {
   const shown = displayPath(file, context)
   if (!path.isAbsolute(shown) || !isAngularCode(context)) return shown

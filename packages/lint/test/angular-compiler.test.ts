@@ -1,6 +1,5 @@
-// Where the template compiler is looked up. None found is looked for
-// again after a while: a compiler installed while an editor's ESLint
-// server runs is there to find.
+// An editor's ESLint server keeps running while the compiler is
+// installed.
 
 import { expect, it, vi } from "vitest"
 

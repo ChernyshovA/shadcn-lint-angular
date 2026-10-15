@@ -449,8 +449,7 @@ function themeImportsOf(root: string | undefined) {
   return (root && themeImports.get(root)) || NO_IMPORTS
 }
 
-// What a stylesheet read as a project's entry gives: whether it imports
-// Tailwind, how many color tokens it declares, and the files it reads.
+// For choosing among an Angular app's global stylesheets.
 export function themeEntryRead(cssFile: string, root: string) {
   const read = themeAt(cssFile, themeImportsOf(root))
   return {
@@ -581,10 +580,10 @@ function relativeTo(root: string, file: string) {
   return path.relative(root, file).replace(/\\/g, "/")
 }
 
-// settings.shadcn.entryPoint, then components.json. Either naming a
-// stylesheet that is not there is a wrong path, not the absence of a
-// theme: say so once and fall back, so the token check does not go quiet
-// meanwhile.
+// settings.shadcn.entryPoint first; a wrong one falls back the same way.
+// A components.json naming a stylesheet that is not there is a wrong
+// path, not the absence of a theme: say so once and fall back to
+// discovery, so the token check does not go quiet meanwhile.
 export function themeFileFor(fromFile: string) {
   const project = projectFor(fromFile)
   if (!project) return null
@@ -615,7 +614,7 @@ function chosenThemeFile(
           ? `Using tailwind.css from components.json, ${relativeTo(project.root, configured)}, until the path is fixed.`
           : fallback
             ? `Using ${relativeTo(project.root, fallback)} until the path is fixed.`
-            : "No stylesheet importing Tailwind was found under the project, so no-unknown-classes reads classes with the grammar bundled with @shadcn/lint until the path is fixed."
+            : "No stylesheet importing Tailwind was found under the project, so no-unknown-classes reads classes with the grammar bundled with shadcn-lint-angular until the path is fixed."
       }`
     )
     return fallback
@@ -633,9 +632,9 @@ function chosenThemeFile(
     )
     return discovered
   }
-  // An Angular app's global stylesheets name its entry. Those of the
-  // other projects in its workspace, when its own names none, only when
-  // the stylesheet found under it holds no theme.
+  // An Angular app's global stylesheets name its entry. Another
+  // project's only when none found under it holds a theme: an app whose
+  // builder lists no styles, as Analog's, imports its own.
   const angular = angularEntryFor(fromFile, project.root)
   if (angular && !angular.shared) return angular.file
   const discovered = discoverThemeFile(project.root)
@@ -668,7 +667,7 @@ export function tailwindEntryFor(fromFile: string) {
     }, which does not import Tailwind. ${
       discovered
         ? `Using ${relativeTo(project.root, discovered)} to read the classes Tailwind knows until the path is fixed.`
-        : "No stylesheet importing Tailwind was found under the project, so no-unknown-classes is using the grammar bundled with @shadcn/lint until the path is fixed."
+        : "No stylesheet importing Tailwind was found under the project, so no-unknown-classes is using the grammar bundled with shadcn-lint-angular until the path is fixed."
     }`
   )
   return discovered
@@ -741,10 +740,9 @@ function workspaceRootOf(root: string) {
 
 const TAILWIND3_DIRECTIVE = /@tailwind\s+(?:base|components|utilities)\b/
 
-// Tailwind v3 is configured in JavaScript, and its stylesheets open with
-// @tailwind directives rather than importing it, so it has no entry to
-// find. Told to name one, a v3 project would only be told that it does
-// not import Tailwind.
+// Tailwind v3, configured in JavaScript with @tailwind directives, has
+// no entry to name: told to, a v3 project would only hear it does not
+// import Tailwind.
 function isTailwind3(root: string) {
   try {
     const { version } = createRequire(path.join(root, "package.json"))(
@@ -767,16 +765,13 @@ function isTailwind3(root: string) {
   })
 }
 
-// No components.json path and no stylesheet importing Tailwind: the rules
-// fall back to the bundled grammar and know no theme. Quietly, that reads
-// as a project that passed, so it is said once, for the first such
-// package of a workspace: in a monorepo every package without a
-// stylesheet of its own would say it again. Only for Angular code: a
-// React, Vue or Svelte file stays as quiet as upstream.
+// No entry: the rules fall back to the bundled grammar with no theme,
+// which quietly reads as a project that passed. Said once per workspace,
+// not by every package without a stylesheet. Called for Angular code only.
 export function warnNoTailwindEntry(fromFile: string) {
   const project = projectFor(fromFile)
   if (!project || project.cssFile || entryPoints.has(project.root)) return
-  // The global stylesheet that imports Tailwind is said on its own.
+  // An unreadable global stylesheet that imports Tailwind has its own warning.
   if (angularEntryUnread(fromFile, project.root)) return
   let message = entryless.get(project.root)
   if (message === undefined) {
@@ -793,7 +788,7 @@ function noEntryMessage(root: string) {
   const where = path.relative(process.cwd(), root) || "."
   const sass = sassTailwindEntryUnder(root)
   const fallback =
-    "so no-unknown-classes reads classes with the grammar bundled with @shadcn/lint, and the project's theme is not read"
+    "so no-unknown-classes reads classes with the grammar bundled with shadcn-lint-angular, and the project's theme is not read"
   return sass
     ? `${relativeTo(root, sass)} imports Tailwind, but no CSS file under ${where} does, and a Sass file is read as the Tailwind entry only among the global styles of angular.json or project.json, ${fallback}. Set settings.shadcn.entryPoint to a stylesheet written as CSS that imports Tailwind with the theme.`
     : `No stylesheet importing Tailwind was found under ${where}, ${fallback}. Set settings.shadcn.entryPoint to the stylesheet that imports Tailwind.`

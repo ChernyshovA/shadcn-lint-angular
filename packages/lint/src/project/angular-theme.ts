@@ -1,17 +1,12 @@
-// An Angular app's Tailwind entry among its global stylesheets, the
-// `styles` of angular.json or an Nx project.json. Angular's build hands
-// each of them to Tailwind on its own, so the app's classes are those of
-// the one that imports Tailwind together with the theme. A stylesheet
-// that only imports Tailwind is not that one: `ng add tailwindcss` writes
-// src/tailwind.css so, and spartan's CLI then writes the Tailwind imports,
-// its preset and the theme into src/styles.scss.
+// An Angular app's Tailwind entry among its global stylesheets. Angular's
+// build hands each to Tailwind on its own, so the entry is the one that
+// imports Tailwind with the theme, not one that only imports it, as the
+// src/tailwind.css of `ng add tailwindcss` beside the theme spartan's CLI
+// writes into src/styles.scss.
 //
-// A Sass stylesheet is read as Tailwind's compiler reads it, as CSS, so
-// it is taken only when nothing in it reads otherwise there: a `//`
-// comment swallows what follows it, an interpolation breaks the rule it
-// is in, `@use` and `@forward` load nothing, and a Sass partial cannot be
-// imported. Such a stylesheet is said once, and the entry is found as
-// before.
+// Tailwind's compiler reads a .scss as CSS, so one is taken only when it
+// reads the same as Sass reads it; otherwise that is said once and the
+// entry is found as before.
 
 import * as fs from "node:fs"
 import * as path from "node:path"
@@ -25,11 +20,10 @@ import { warnOnce } from "./warn"
 
 type Style = {
   file: string
-  // Imports Tailwind, `tailwindcss` or one of its stylesheets, as
-  // spartan's split theme.css and utilities.css.
+  // `tailwindcss` or one of its stylesheets: spartan imports theme.css
+  // and utilities.css apart.
   tailwind: boolean
-  // Holds a theme for Tailwind, itself or through what it imports:
-  // @theme, @plugin, @config, @utility or @custom-variant.
+  // A THEME_RULE in it or in what it imports.
   theme: boolean
   tokens: number
   // Why Tailwind's compiler cannot read it as written.
@@ -38,15 +32,12 @@ type Style = {
 
 type Analysis = {
   config: string
-  // The styles of every project, for a file whose project names none.
   shared: boolean
   styles: Style[]
-  // The global stylesheet that imports Tailwind with the theme.
   entry: Style | null
-  // The others that do, which Tailwind builds on their own.
+  // Others that import Tailwind with a theme.
   rivals: Style[]
-  // One that imports Tailwind but cannot be read as the entry, when no
-  // other is.
+  // With no entry: one that imports Tailwind but cannot be read.
   unread: Style | null
 }
 
@@ -84,7 +75,7 @@ const CUSTOM_PROPERTY = /--[\w-]*\s*:/y
 // custom property through as written but for an interpolation, so a
 // `//` there, `--docs: https://…`, is no comment.
 function sassOnly(text: string) {
-  // Where a value runs to the `;` or `}` that ends it.
+  // Inside a custom property's value, up to the `;` or `}` that ends it.
   let custom = false
   let depth = 0
   let previous = ";"
@@ -180,10 +171,9 @@ function styleOf(file: string, root: string): Style | null {
   }
 }
 
-// A Sass stylesheet that reads as CSS may still stop Tailwind's compiler,
-// as an unclosed rule does, where the CSS entry found before builds. One
-// whose Tailwind cannot be found says nothing of the stylesheet. Asked
-// again when the file changes, or a few seconds on.
+// A .scss that reads as CSS may still stop Tailwind's compiler, as an
+// unclosed rule does; a Tailwind that cannot be found says nothing of the
+// stylesheet. Asked again when the file changes, or a few seconds on.
 const builds = new Map<
   string,
   { at: number; mtime: number | null; failure: string | null }
@@ -257,11 +247,9 @@ function analysisFor(fromFile: string, root: string) {
 const relativeTo = (root: string, file: string) =>
   path.relative(root, file).replace(/\\/g, "/")
 
-// The global stylesheet that imports Tailwind with the theme, for an
-// Angular file, and whether it is another project's: a library is styled
-// by the apps that use it, and an app whose builder lists no styles, such
-// as Analog's, imports its own. Null when there is none, or one that
-// cannot be read as written: then the entry is found as for any project.
+// For an Angular file: the global stylesheet that imports Tailwind with
+// the theme, and whether it is another project's. Null when there is none
+// that can be read as written.
 export function angularEntryFor(fromFile: string, root: string) {
   if (!isAngularFile(fromFile)) return null
   const analysis = analysisFor(fromFile, root)
@@ -270,8 +258,6 @@ export function angularEntryFor(fromFile: string, root: string) {
     : null
 }
 
-// Whether a stylesheet holds a theme for Tailwind, itself or through what
-// it imports.
 export function holdsTheme(file: string, root: string) {
   return memoize(
     `angular-entry-theme:${file}\u0000${root}`,
@@ -279,17 +265,15 @@ export function holdsTheme(file: string, root: string) {
   )
 }
 
-// Whether the global stylesheet Tailwind is imported from cannot be read
-// as written, which is said on its own.
+// Whether the stylesheet that imports Tailwind cannot be read as written.
 export function angularEntryUnread(fromFile: string, root: string) {
   if (!isAngularFile(fromFile)) return false
   return Boolean(analysisFor(fromFile, root)?.unread)
 }
 
-// For an Angular file, once: the global stylesheet that imports Tailwind
-// cannot be read as the entry, unless the settings or components.json
-// name one, or the stylesheet the theme is read from holds none while
-// another global stylesheet does.
+// For an Angular file, once: the entry is unreadable, one of several, or
+// holds no theme that another global stylesheet holds. `named`: the
+// settings or components.json name it.
 export function checkAngularTheme(
   fromFile: string,
   root: string,
@@ -322,7 +306,7 @@ function warnAbout(
       `${relativeTo(root, file)} imports Tailwind${theme ? " and holds the theme" : ""}, but Tailwind's compiler cannot read it as written: ${unread}. ${
         themeFile
           ? `The theme is read from ${relativeTo(root, themeFile)} instead.`
-          : "So no-unknown-classes reads classes with the grammar bundled with @shadcn/lint, and the project's theme is not read."
+          : "So no-unknown-classes reads classes with the grammar bundled with shadcn-lint-angular, and the project's theme is not read."
       } Import Tailwind and the theme from a CSS file among the styles of ${config}, or set settings.shadcn.entryPoint to one.`
     )
     return
@@ -369,12 +353,8 @@ const listed = (names: string[]) =>
     ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`
     : names.join(" and ")
 
-// Of several global stylesheets that import Tailwind with a theme, the
-// app's classes are one's: the one that declares the most tokens is
-// taken, and that is said once. A project that names none of its own
-// takes them from every project, the theme found under its package
-// first, and which app it is built for is written nowhere the linter
-// reads.
+// Which of several themed stylesheets the app's classes come from is
+// written nowhere the linter reads, so the guess is said.
 function warnRivals(
   analysis: Analysis,
   root: string,

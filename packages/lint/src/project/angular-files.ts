@@ -1,10 +1,7 @@
-// Which files the rules found to be Angular code as they started on them
-// (rules/settings.ts): templates, scripts that import Angular, and the
-// other scripts of an Angular project (sites/readers/angular-code.ts).
-// What this plugin reads from a project the Angular way, by a file's path
-// alone, such as the theme an app's global styles hold or spartan's
-// components.json, it reads for those files only, so a React, Vue or
-// Svelte file in the same workspace lints as it does without it.
+// The files the rules found to be Angular code as they started on them.
+// What is read from a project the Angular way by path alone (an app's
+// global styles, spartan's components.json) is read for these only, so a
+// React, Vue or Svelte file beside them lints as if Angular were absent.
 
 // The files linted last: a file asks while it is linted.
 const LIMIT = 256

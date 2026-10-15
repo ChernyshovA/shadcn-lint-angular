@@ -69,8 +69,6 @@ function recordThemeImports(context: any, settings: any) {
 
 // The stylesheet that imports Tailwind, named the way
 // eslint-plugin-better-tailwindcss names it, from where ESLint runs.
-// Without components.json, or with a Sass entry no CSS file replaces, it
-// is the only way to name one.
 function recordEntryPoint(context: any, settings: any) {
   const value =
     settings && typeof settings === "object" ? settings.entryPoint : null

@@ -84,9 +84,8 @@ export function replaceInLiteral(
   return replaced === inner ? null : `${quote}${replaced}${quote}`
 }
 
-// angular-eslint's processor lints an inline template as a file of its
-// own and moves fixes back into the .ts, but not suggestions: applied
-// there, one would rewrite the top of the file. The finding stays.
+// angular-eslint's processor maps an inline template's fixes back into the
+// .ts, but not its suggestions, which would rewrite the top of the file.
 function isInlineAngularTemplate(context: any) {
   return (
     context.physicalFilename != null &&

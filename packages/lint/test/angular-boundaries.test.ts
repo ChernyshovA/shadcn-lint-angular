@@ -432,7 +432,7 @@ describe("a plain script in a mixed Nx workspace", () => {
   })
 
   // An Nx workspace whose Angular app is at its root, with a React app
-  // inside it: a file is the nearest project's.
+  // inside it.
   it("gives a file to the nearest project", () => {
     write({
       "project.json": JSON.stringify({
@@ -452,8 +452,7 @@ describe("a plain script in a mixed Nx workspace", () => {
   })
 })
 
-// An Angular CLI workspace has no project.json: a file under a project's
-// root in angular.json is the project's.
+// An Angular CLI workspace has no project.json.
 describe("a plain script in an Angular CLI workspace", () => {
   const settings = { shadcn: { mergeFunctions: ["classes"] } }
   const helper = `export const a = classes("p-4", "bg-red-500")`
@@ -485,10 +484,8 @@ describe("a plain script in an Angular CLI workspace", () => {
     }
   })
 
-  // A project rooted at the workspace, as `ng new` writes it, holds the
-  // workspace up to a package of its own below it: a React app beside it
-  // with its own package.json is not Angular's. A library is its own
-  // project, with the package.json ng-packagr reads.
+  // `ng new` roots its project at the workspace. A library has a
+  // package.json too, which ng-packagr reads, and is a project of its own.
   it("is a root project's up to a package of its own below the workspace", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "shadcn-ng-cli-"))
     try {

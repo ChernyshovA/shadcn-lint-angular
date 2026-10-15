@@ -112,7 +112,7 @@ export default [
       const out = lint(BUN, args)
       for (const rule of Object.keys(RULES)) expect(out).toContain(rule)
       // A worker that failed under Bun would fall back with a warning.
-      expect(out).not.toContain("[@shadcn/lint]")
+      expect(out).not.toContain("[shadcn-lint-angular]")
       expect(out).toBe(lint(NODE, args))
     })
 
@@ -129,7 +129,7 @@ export default [
       for (const rule of Object.keys(RULES)) {
         expect(out).toContain(`shadcn(${rule.slice("shadcn/".length)})`)
       }
-      expect(out).not.toContain("[@shadcn/lint]")
+      expect(out).not.toContain("[shadcn-lint-angular]")
       expect(out).toBe(lint(NODE, args))
     })
   }

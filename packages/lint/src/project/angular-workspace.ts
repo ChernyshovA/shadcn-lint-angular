@@ -1,9 +1,6 @@
-// The Angular project a file belongs to, as its workspace configures it:
-// angular.json, or an Nx workspace's project.json files. A project's
-// global stylesheets are the `styles` of the targets that build it
-// (`architect` in angular.json), a path or { input } from the workspace
-// root, and its `stylePreprocessorOptions.includePaths` serve every Sass
-// import.
+// The Angular project a file belongs to, from angular.json or an Nx
+// workspace's project.json files: the global `styles` of the targets that
+// build it, and the include paths that serve every Sass import.
 
 import * as fs from "node:fs"
 import * as path from "node:path"
@@ -12,12 +9,12 @@ import { dirOf, findUp, isFile, memoize, mtimeOf } from "./fs"
 import { readJsonc } from "./resolve"
 import { warnOnce } from "./warn"
 
-export type AngularProject = {
+type AngularProject = {
   // angular.json, or the project.json of an Nx project.
   config: string
   root: string
-  // Stylesheets as a config writes them, the file a path names, and the
-  // workspace root a package name resolves from (angular-styles.ts).
+  // `input` as written, the file it names, and the workspace root a
+  // package name resolves from (angular-styles.ts).
   styles: { input: string; file: string | null; config: string; dir: string }[]
   includes: string[]
   // The styles of every project, for one that names none of its own.
@@ -28,14 +25,12 @@ type Workspace = {
   config: string
   dir: string
   projects: AngularProject[]
-  // Whether the scan for project.json files stopped short of a directory
-  // too deep to enter.
+  // The scan for project.json files stopped at MAX_SCAN_DEPTH.
   deep: boolean
 }
 
 const SKIP_DIRS = new Set(["node_modules", "dist", "build", "coverage", "tmp"])
 
-// How far an Nx workspace is scanned for project.json files.
 const MAX_SCAN_DEPTH = 5
 const MAX_PROJECT_FILES = 500
 
@@ -65,8 +60,8 @@ function projectFiles(dir: string, depth: number, scan: Scan) {
   }
 }
 
-// A style entry that names a file from the workspace root. Any other is
-// a package's, read as a stylesheet by angular-styles.ts.
+// Null for a package name, which angular-styles.ts resolves to its
+// stylesheet.
 function resolveStyle(dir: string, input: string) {
   const file = path.resolve(dir, input)
   return isFile(file) ? file : null
@@ -80,8 +75,8 @@ const ANGULAR_BUILDER = /angular|ngx-build-plus/
 const isObject = (value: unknown): value is Record<string, any> =>
   !!value && typeof value === "object" && !Array.isArray(value)
 
-// What a config holds where Angular takes something else is skipped, by
-// where it is, so that it is said once and the rest is read.
+// Fields not of the shape Angular takes, by path: said once, and the rest
+// is read.
 type Skipped = string[]
 
 function projectOf(
@@ -142,7 +137,6 @@ function projectOf(
 
 let workspaceReads = 0
 
-// How many times a workspace config was read, for tests.
 export function workspaceReadsForTests() {
   return workspaceReads
 }
@@ -161,9 +155,9 @@ function readWorkspace(config: string, skipped: Skipped): Workspace {
       isObject(json.projects) ? json.projects : {}
     )) {
       const at = `projects.${name}.`
-      // Nx's own angular.json names a project by its directory, a string
-      // this file does not read; one that is no object holds no root, and
-      // taking the workspace's for it would make every file its.
+      // Nx's own angular.json maps a project to its directory, a string
+      // not followed here: defaulting its root to the workspace's would
+      // make every file its.
       if (!isObject(project)) {
         skipped.push(`projects.${name} (not an object)`)
         continue
@@ -202,8 +196,7 @@ function readWorkspace(config: string, skipped: Skipped): Workspace {
   return { config, dir, projects, deep: scan.deep }
 }
 
-// A config as a warning names it: from the working directory when it is
-// under it.
+// Relative to the working directory when under it.
 function shownPath(config: string) {
   const relative = path.relative(process.cwd(), config)
   return (relative.startsWith("..") ? config : relative).replace(/\\/g, "/")
@@ -258,8 +251,8 @@ function workspaceFor(fromFile: string) {
   return workspace
 }
 
-// A file whose own project.json lies deeper than an Nx workspace is
-// scanned: its project's styles are not read, and that is said once.
+// A project.json deeper than the scan: its styles are not read, and that
+// is said rather than left silent.
 function warnUnscanned(workspace: Workspace, file: string) {
   const own = findUp(path.dirname(file), "project.json")
   if (!own || !within(workspace.dir, own)) return
@@ -280,10 +273,9 @@ const within = (root: string, file: string) => {
   return !relative.startsWith("..") && !path.isAbsolute(relative)
 }
 
-// Whether a project holds a file: under its root, and, for one rooted at
-// the workspace, as `ng new` writes it ("root": ""), not in a package of
-// its own below it, such as a React app beside the Angular one with its
-// own package.json.
+// A project rooted at the workspace, as `ng new` writes it ("root": ""),
+// does not hold a package of its own below it, such as a React app with
+// its own package.json.
 function holds(workspace: Workspace, project: AngularProject, file: string) {
   if (!within(project.root, file)) return false
   if (project.root !== workspace.dir) return true
@@ -293,11 +285,9 @@ function holds(workspace: Workspace, project: AngularProject, file: string) {
   )
 }
 
-// Whether an Nx project.json is an Angular project's: a target an
-// Angular builder or executor runs, or the `prefix` of its components'
-// selectors, which Nx's Angular generators write for an application and
-// for a library, one that is not buildable having no target of
-// Angular's.
+// An Angular builder or executor, or a `prefix`: Nx's Angular generators
+// write one for every app and library, and a library that is not
+// buildable has no Angular target.
 function isAngularProjectJson(json: any) {
   if (!isObject(json)) return false
   if (typeof json.prefix === "string") return true
@@ -316,8 +306,7 @@ const unscanned = (relative: string) =>
     .split(/[\\/]/)
     .some((part) => part.startsWith(".") || SKIP_DIRS.has(part))
 
-// The nearest project.json above a directory, up to the workspace's,
-// and whether it is an Angular project's.
+// By the nearest project.json above the directory, the one that owns it.
 function inAngularNxProject(dir: string, top: string) {
   return memoize(`angular-nx-project:${dir}`, () => {
     for (let at = dir; within(top, at); at = path.dirname(at)) {
@@ -331,12 +320,8 @@ function inAngularNxProject(dir: string, top: string) {
   })
 }
 
-// Whether a file lies in an Angular project: under the root of a project
-// of angular.json, short of a package of its own below a root project,
-// or of the nearest Nx project.json when that one is Angular's, so a
-// React app beside an Angular one, or inside it, is its own. In an Nx
-// workspace only the project.json files above the file are read, not the
-// workspace, and as deep as the file lies.
+// In an Nx workspace only the project.json files above the file are
+// read: no scan, and no depth limit.
 export function inAngularProject(fromFile: string) {
   const dir = dirOf(fromFile)
   const config = findUp(dir, "angular.json") ?? findUp(dir, "nx.json")

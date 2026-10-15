@@ -117,7 +117,6 @@ export function resetFsMemo() {
   memo.clear()
 }
 
-// How many answers the memo holds, for tests.
 export function memoSizeForTests() {
   return memo.size
 }

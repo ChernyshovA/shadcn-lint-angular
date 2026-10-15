@@ -1,9 +1,6 @@
 // @angular-eslint/template-parser hands over the Angular compiler's own
-// template AST, each node typed by its class: Element, TextAttribute,
-// BoundAttribute. A static `class="p-4"` is a TextAttribute holding the
-// decoded text and the spans it was read from. A binding, `[class]` or
-// `class="{{ x }}"`, is a BoundAttribute whose value is an expression,
-// read through `estreeOf`.
+// template AST: a static `class` is a TextAttribute, a binding (`[class]`,
+// `class="{{ x }}"`) a BoundAttribute whose value is an expression.
 
 import { angularCompiler } from "./angular-compiler"
 import {
@@ -17,12 +14,9 @@ import type { TemplateReader } from "./types"
 
 const literals = new WeakMap<object, any>()
 
-// An inline template written as a template string with `${x}` reaches
-// the parser as source text: the interpolation is JavaScript the
-// processor does not run. It and the token glued to it are blanked to
-// spaces of the same length, so what is read is what is written out and
-// every offset stays where it was, the way a glued interpolation in a JSX
-// template literal leaves no class of its own.
+// An inline template written with `${x}` reaches the parser as source
+// text. The interpolation and the token glued to it (no class, as in a JSX
+// template literal) are blanked to spaces, so every offset stays put.
 function withoutInterpolations(value: string) {
   if (!value.includes("${")) return value
   let out = ""
@@ -58,17 +52,15 @@ function withoutInterpolations(value: string) {
   return out
 }
 
-// The value as a literal over its quotes, where JSX and Vue place theirs.
-// Lines and columns are the parser's own count, so a finding lines up
-// with its nodes and its comments. Built once per attribute so every rule
-// sees one node.
+// The value as a literal over its quotes, where JSX and Vue place theirs,
+// built once so every rule sees one node. Lines and columns are the
+// parser's own count, so a finding lines up with its nodes and comments.
 function literalOf(attribute: any) {
   const span = attribute?.valueSpan
   if (!span) return null
   let literal = literals.get(attribute)
   if (literal) return literal
-  // `start` skips the whitespace a value opens with; `fullStart` is where
-  // the value begins.
+  // `start` skips leading whitespace; `fullStart` is where the value begins.
   const start = span.fullStart ?? span.start
   const end = span.end
   const text: string = start.file?.content ?? ""
@@ -79,8 +71,6 @@ function literalOf(attribute: any) {
   literal = {
     type: "AngularLiteral",
     value,
-    // Bindings blanked out of the value: a suggestion looks for the class
-    // past them.
     masked: value !== attribute.value || attribute.masked === true,
     range: [start.offset - pad, end.offset + pad],
     loc: {
@@ -170,10 +160,9 @@ function decode(raw: string, file: string) {
   return { text, at }
 }
 
-// The parser reads a binding from its value with entities decoded, and
-// its spans count that text from where the value starts. Where the file spells the value
-// otherwise, its offsets are mapped back through the decoding; a value
-// this cannot decode as the parser did is placed as a whole.
+// The parser's spans count a binding's text with entities decoded. Where
+// the file spells it otherwise, offsets map back through the decoding; a
+// value not decoded as the parser did is placed as a whole.
 function sourceOf(attribute: any): ExpressionSource | null {
   const file = attribute?.sourceSpan?.start?.file
   if (typeof file?.content !== "string") return null
@@ -201,9 +190,8 @@ function sourceOf(attribute: any): ExpressionSource | null {
   }
 }
 
-// The binding as written between the brackets: `class.active`,
-// `style.width.px`, `attr.fill`. The parser keeps the compiler's binding
-// kind out of reach, since `type` is the node's class name.
+// The key as written (`class.active`, `style.width.px`): the parser hides
+// the compiler's binding kind, since `type` is the node's class name.
 function keyOf(attribute: any): string {
   const key = attribute?.keySpan
   const text: string = key?.start?.file?.content ?? ""
@@ -212,10 +200,8 @@ function keyOf(attribute: any): string {
     : (attribute?.name ?? "")
 }
 
-// What a binding sets, under the attribute name a static one would have:
-// `[ngClass]`, `[class.x]` and `[className]`, the property the class
-// attribute reflects, set classes, as they do in `host`; `[ngStyle]` and
-// `[style.x]` a style, `[attr.fill]` the attribute.
+// A binding under the name of the static attribute it sets. `[className]`
+// is the property the class attribute reflects.
 function bindingName(attribute: any) {
   const key = keyOf(attribute)
   if (key.startsWith("class.") || key === "ngClass" || key === "className")
@@ -246,8 +232,7 @@ function withoutUnits(node: any): any {
   return node
 }
 
-// `[class.active]="on"` adds the class its key names; `[style.color]="c"`
-// is the style object `{ color: c }`. Everything else is its expression.
+// `[class.a]` is the class `a`; `[style.color]="c"` is `{ color: c }`.
 function bindingValue(attribute: any) {
   if (values.has(attribute)) return values.get(attribute)
   const source = sourceOf(attribute)
@@ -295,8 +280,7 @@ function bindingValue(attribute: any) {
 }
 
 // A structural directive's template copies the element's bindings into
-// its own inputs: the same node, reached twice, with the template as its
-// parent.
+// its inputs: the same node, reached twice, with the template as parent.
 function elementOfBinding(attribute: any) {
   const parent = attribute?.parent
   if (parent?.type === "Element") return parent
@@ -318,11 +302,9 @@ function tagOf(element: any) {
 
 export type ElementSelector = {
   tag: string
-  // Each attribute with its value, a binding or an event with "", in the
-  // order the template writes them.
+  // In the order written; a binding or an event has the value "".
   attributes: [string, string][]
-  // Those a contract can name the element by, past the events the
-  // compiler matches too that are not the element's own.
+  // Those a contract can name the element by: events not its own left out.
   names: string[]
 }
 
@@ -337,10 +319,9 @@ function isAnimation(binding: any) {
 
 const selectors = new WeakMap<object, ElementSelector>()
 
-// What Angular matches a directive's selector against: the tag, each
-// static attribute (the parser keeps i18n's out), each property or
-// two-way binding and each event, by the names the template writes. An
-// element in an ICU is matched by none.
+// What Angular matches a directive's selector against: the tag, static
+// attributes (the parser keeps i18n's out), bindings and events, by their
+// written names. An element in an ICU is matched by none.
 export function selectorOf(element: any): ElementSelector | null {
   if (element?.type !== "Element" || element.icu) return null
   let selector = selectors.get(element)
@@ -362,9 +343,9 @@ export function selectorOf(element: any): ElementSelector | null {
     if (NOT_SELECTED.test(keyOf(input)) || isAnimation(input)) continue
     written.push({ at: at(input), name: input.name, value: "", own: true })
   }
-  // Every event, the way the compiler matches them, though an animation's
-  // (`(@fade.done)`, `(animate.leave)`) and one on window, document or
-  // body are not the element's own.
+  // The compiler matches every event, though an animation's (`(@fade.done)`,
+  // `(animate.leave)`) or one on window, document or body is not the
+  // element's own.
   for (const output of element.outputs ?? []) {
     if (typeof output?.name !== "string") continue
     written.push({
@@ -388,11 +369,9 @@ export function selectorOf(element: any): ElementSelector | null {
   return selector
 }
 
-// The names a contract can match on an element: its tag, then its
-// attributes, bindings and events, without the class and style the
-// classes are written in. An <ng-container> renders no element to wear
-// a class.
-export function contractNamesOf(element: any) {
+// The names a contract can match: the tag, then the selector's names less
+// class and style. An <ng-container> renders no element to wear a class.
+function contractNamesOf(element: any) {
   const selector = selectorOf(element)
   if (!selector?.tag || selector.tag === "ng-container") return null
   const names = new Set([selector.tag])
@@ -402,10 +381,9 @@ export function contractNamesOf(element: any) {
   return [...names]
 }
 
-// Where an interpolation that starts at `from` ends, as the compiler's
-// expression parser finds it: at the first `}}` outside a string, or, past
-// a `//` comment, at the next `}}`. -1 for one that never ends, which is
-// text.
+// Where an interpolation from `from` ends, as the compiler's expression
+// parser finds it: the first `}}` outside a string, or past a `//` comment
+// the next `}}`. -1 for one that never ends, which is text.
 function interpolationEnd(value: string, from: number) {
   let quote: string | null = null
   let escapes = 0
@@ -426,9 +404,8 @@ function interpolationEnd(value: string, from: number) {
   return -1
 }
 
-// `{{ x }}` in an attribute of an element in an ICU, with the token
-// glued to it, blanked to spaces of the same length: what the i18n
-// runtime binds is not a class written out.
+// `{{ x }}` in an ICU element's attribute, and the token glued to it,
+// blanked to spaces: what the i18n runtime binds is no class written out.
 function withoutBindings(value: string) {
   // UTF-16 units, as the offsets count them.
   const out = value.split("")
@@ -447,17 +424,15 @@ function withoutBindings(value: string) {
 
 const tagSet = (tags: string) => new Set(tags.split(","))
 
-// The elements and attributes Angular's i18n runtime creates in an ICU's
-// case (walkIcuTree in @angular/core), its sanitizer's VALID_ELEMENTS and
-// VALID_ATTRS, the same from Angular 19 to 22. It drops another element
-// with all it holds, and another attribute: an <svg>, a custom element,
-// `style`, `ngClass`, a binding, an event or a reference.
+// The elements and attributes Angular's i18n runtime creates in an ICU
+// case (walkIcuTree in @angular/core: VALID_ELEMENTS, VALID_ATTRS, the same
+// in 19 to 22). Any other element is dropped with all it holds, any other
+// attribute alone: <svg>, a custom element, `style`, a binding, an event.
 const ICU_ELEMENTS = tagSet(
   "a,abbr,acronym,address,area,article,aside,audio,b,bdi,bdo,big,blockquote,br,caption,center,cite,code,col,colgroup,dd,del,details,dfn,dialog,dir,div,dl,dt,em,figcaption,figure,font,footer,h1,h2,h3,h4,h5,h6,header,hgroup,hr,i,img,ins,kbd,label,li,main,map,mark,menu,nav,ol,p,picture,pre,q,rp,rt,ruby,s,samp,section,small,source,span,strike,strong,sub,summary,sup,table,tbody,td,tfoot,th,thead,time,tr,track,tt,u,ul,var,video,wbr"
 )
-// The runtime parses a case as the body of a document (DOMParser,
-// getInertBodyElement in @angular/core), where these start tags outside
-// a <table> are dropped and what they hold is kept.
+// The runtime parses a case as a document body (getInertBodyElement in
+// @angular/core): these tags outside a <table> go, their content stays.
 const TABLE_PARTS = tagSet("caption,col,colgroup,tbody,td,tfoot,th,thead,tr")
 
 const ICU_ATTRIBUTES = tagSet(
@@ -478,14 +453,11 @@ function placed(span: any) {
   }
 }
 
-// The attributes of the elements in an ICU's cases, `{n, plural, =0
-// {<span class="…">}}`, nested ICUs too. The parser keeps those elements
-// only in the i18n message, as tags with their attributes as text, so
-// they are read again from the template with the compiler's own HTML
-// parser, over the ICU's span, in the file's own offsets. The i18n
-// runtime creates them as plain elements with static attributes, those
-// of the elements and attributes it knows, named as the browser parses
-// them, in lowercase.
+// The attributes of elements in an ICU's cases (`{n, plural, =0
+// {<span class="…">}}`), nested ICUs too. The parser keeps those elements
+// only as text in the i18n message, so the compiler's HTML parser reads
+// the ICU's span again, in the file's offsets. The runtime creates them
+// with static attributes, named in lowercase as the browser parses them.
 function icuAttributes(icu: any): any[] {
   let out = held.get(icu)
   if (out) return out
@@ -577,9 +549,8 @@ export const angularReader: TemplateReader = {
   // `pStyleClass="@next"`. Its enterActiveClass and the rest are classes.
   notClassAttributes: ["pStyleClass"],
   spreads: [],
-  // `[class]` and `[ngClass]` take an object with classes as keys, and
-  // so does an input such as Material's `[panelClass]`, which hands it on
-  // to them.
+  // `[class]`, `[ngClass]` and inputs such as Material's `[panelClass]`,
+  // which hand it on to them, take an object with classes as keys.
   classObjects: (node, name) =>
     name === "class" || node?.type === "BoundAttribute",
   staticStyles: true,
@@ -597,10 +568,9 @@ export const angularReader: TemplateReader = {
     const element = node?.parent
     return element?.type === "Element" ? element : null
   },
-  // A custom element is a component. Its selector decides which one, so
-  // the tag is not turned into a class name the way Vue's <card-title> is,
-  // and <Card> is not the Card a .tsx file imports: HTML reads a tag in
-  // any case, and the lowercase name resolves to no component.
+  // A custom element is a component its selector names, not an import: the
+  // tag is not made a class name as Vue's <card-title> is, and the root is
+  // lowercased, as HTML reads a tag, so <Card> resolves to no import.
   nameOf(element) {
     const text = tagOf(element)
     if (!text) return null

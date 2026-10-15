@@ -134,9 +134,8 @@ describe("a broken contract in the rule", () => {
     })
   })
 
-  // Slashes make a pattern a regex for Angular template names only. In a
-  // .tsx file "/Button/q" is a regex over component names, valid and
-  // matching none, as it always was.
+  // In a .tsx file a pattern is a regex source, as upstream reads it:
+  // "/Button/q" is valid there and matches no component.
   test("a pattern in slashes is no error outside an Angular template", () => {
     createTester().run("no-restyle", noRestyle as any, {
       valid: [

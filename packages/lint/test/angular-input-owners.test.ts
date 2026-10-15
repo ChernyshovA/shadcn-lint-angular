@@ -53,7 +53,6 @@ function lintAt(
   )
 }
 
-// Each finding as the class and the element it names.
 const findings = (code: string, options: unknown, filename = PAGE) =>
   lintAt(code, options, filename).map(
     (m) => `${m.message.split('"')[1]} on <${/<([^>]+)>/.exec(m.message)![1]}>`
@@ -72,7 +71,6 @@ describe("the input of a directive a library's .d.ts declares", () => {
     expect(findings(code, contracts("/^mat-/"))).toEqual([
       "bg-pink-500 on <mat-icon>",
     ])
-    // A contract on the directive judges it.
     expect(findings(code, contracts("/^mat-/", "matTooltip"))).toEqual([
       "bg-pink-500 on <mat-icon matTooltip>",
       "bg-pink-500 on <mat-icon>",
@@ -145,8 +143,6 @@ describe("the input of a directive a library's .d.ts declares", () => {
     ])
   })
 
-  // Every directive on it was read whole, and none takes it: the
-  // attribute lands nowhere.
   it("is no one's when every directive on the element was read and none declares it", () => {
     expect(
       findings(
@@ -175,7 +171,6 @@ describe("the input of a directive a library's .d.ts declares", () => {
     ).toEqual(["bg-pink-500 on <kit-mixed>"])
   })
 
-  // Nor a file to add one to: its library defines them.
   it("leaves the message without variants: a compiled class has no cva to read", () => {
     expect(
       lintAt(
@@ -273,9 +268,8 @@ describe("the scope of a component an NgModule declares", () => {
   })
 })
 
-// A list a decorator names by a constant is read through it. What is
-// there and cannot be read leaves whose an input is unknown, never no
-// one's.
+// What is there and cannot be read leaves whose an input is unknown,
+// never no one's.
 describe("a scope written through constants", () => {
   const FORMS = path.join(APP, "forms")
   const code = `<mat-select panelClass="bg-pink-500"></mat-select><mat-icon matTooltip="Delete" matTooltipClass="rounded-full"></mat-icon>`
@@ -472,8 +466,7 @@ describe("without the library installed", () => {
 })
 
 // Only what a template's component imports is read: the entry points it
-// names, and what their modules export. What a module imports for its
-// own templates is not.
+// names, and what their modules export.
 describe("the .d.ts read", () => {
   // Those earlier tests read, and every answer built of them, are
   // forgotten: what is read is this run's.

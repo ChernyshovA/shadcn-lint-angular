@@ -39,7 +39,7 @@ importers:
   packages/evals:
     dependencies:
       '@shadcn/lint':
-        specifier: workspace:*
+        specifier: workspace:shadcn-lint-angular@*
         version: link:../lint
     devDependencies:
       '@base-ui/react':

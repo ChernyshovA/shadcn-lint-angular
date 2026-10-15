@@ -64,7 +64,7 @@ function transportFailed(reason: string) {
     bridge = false
     warnOnce(
       "tailwind:off",
-      `The Tailwind worker failed twice (${reason}); no-unknown-classes is using the grammar bundled with @shadcn/lint for the rest of this run.`
+      `The Tailwind worker failed twice (${reason}); no-unknown-classes is using the grammar bundled with shadcn-lint-angular for the rest of this run.`
     )
   }
   return null
@@ -78,7 +78,7 @@ function start() {
     bridge = false
     warnOnce(
       "tailwind:off",
-      "The Tailwind worker script was not found next to @shadcn/lint; no-unknown-classes is using the bundled grammar."
+      "The Tailwind worker script was not found next to shadcn-lint-angular; no-unknown-classes is using the bundled grammar."
     )
     return null
   }
@@ -151,7 +151,7 @@ function themeFailed(cssFile: string, reason: string) {
   memos.delete(cssFile)
   warnOnce(
     `tailwind:${cssFile}:${reason}`,
-    `The Tailwind theme at ${cssFile} could not be built (${reason}); no-unknown-classes is using the grammar bundled with @shadcn/lint there until it can.`
+    `The Tailwind theme at ${cssFile} could not be built (${reason}); no-unknown-classes is using the grammar bundled with shadcn-lint-angular there until it can.`
   )
   return null
 }
@@ -203,10 +203,9 @@ function verdictsFor(cssFile: string, candidates: string[]) {
   return memo!.verdicts
 }
 
-// Why Tailwind's compiler cannot build a stylesheet, or null when it
-// can, or when the oracle cannot tell. Asked before a stylesheet is
-// taken for the theme, so the caller says it, and the failure is not
-// remembered against a theme in use.
+// Why Tailwind's compiler cannot build a stylesheet; null when it can or
+// the oracle cannot tell. Asked before it is taken for the theme, so the
+// caller says it, and nothing is remembered against a theme in use.
 export function buildFailureOf(cssFile: string) {
   if (bridge === false || memos.has(cssFile)) return null
   const answer = ask(cssFile, [])

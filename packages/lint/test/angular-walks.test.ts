@@ -1,8 +1,7 @@
-// Every walk through Angular code meets each thing once: re-exports
-// that loop back, constants that hold each other, host directives and
-// classes that meet again. What loops, or meets again, is no more to
-// read, so a walk ends in time on the worst input it can be given; its
-// depth limit is only a guard.
+// Every walk through Angular code meets each thing once, so it ends in
+// time on the worst input it can be given: re-exports that loop back,
+// constants that hold each other, host directives and classes that meet
+// again. Its depth limit is only a guard.
 
 import * as fs from "node:fs"
 import * as os from "node:os"
@@ -16,8 +15,7 @@ import { ownClassesOfCss } from "../src/project/angular-styles"
 import { memoSizeForTests, TTL } from "../src/project/fs"
 import { resetWarnings, setWarningSink } from "../src/project/warn"
 
-// The longest a walk may take on its worst input, cold. Each of these
-// took tens of seconds or more before it met each thing once.
+// The longest a walk may take on its worst input, cold.
 const LIMIT = 3000
 
 let root = ""
@@ -43,8 +41,6 @@ const page = (imports: string, head: string[] = [], options = "") =>
     `export class PageComponent {}`,
   ].join("\n")
 
-// The classes no-restyle reports in the page's template, and how long
-// the lint took.
 const restyled = (html: string) => {
   const filename = path.join(root, "src/app/page.component.html")
   fs.writeFileSync(filename, html)
@@ -372,8 +368,6 @@ describe("a stylesheet's nesting", () => {
     }
   )
 
-  // The bound is on all a stylesheet's rules come to, so rules under it
-  // each do not add up past it, however many sit side by side.
   it("bounds what all the rules nested in a stylesheet come to", () => {
     const started = performance.now()
     let siblings = ""
@@ -450,7 +444,7 @@ describe("a stylesheet's nesting", () => {
       expect(performance.now() - started).toBeLessThan(LIMIT)
       expect(messages).toEqual([])
       expect(warnings.filter((w) => w.includes("The styles of"))).toEqual([
-        "[@shadcn/lint] The styles of PageComponent in src/app/page.component.ts cannot be read: the selectors of its rules, nested in the rules around them, grow by more than 1000000 characters, at `&:not(&)` in src/app/page.component.scss. shadcn/no-unknown-classes is skipped in its template and in the classes of its element in others, since any class there may be one they declare.",
+        "[shadcn-lint-angular] The styles of PageComponent in src/app/page.component.ts cannot be read: the selectors of its rules, nested in the rules around them, grow by more than 1000000 characters, at `&:not(&)` in src/app/page.component.scss. shadcn/no-unknown-classes is skipped in its template and in the classes of its element in others, since any class there may be one they declare.",
       ])
     } finally {
       setWarningSink((message) => console.warn(message))
@@ -477,8 +471,7 @@ describe("a stylesheet's nesting", () => {
 })
 
 // An editor's ESLint server lints a file each time it is saved, for as
-// long as the editor is open. What it keeps of a file is replaced when
-// the file changes, not added to.
+// long as the editor is open.
 describe("a component saved again and again", () => {
   afterEach(() => vi.useRealTimers())
 

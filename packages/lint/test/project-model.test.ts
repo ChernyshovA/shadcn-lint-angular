@@ -79,6 +79,7 @@ describe("resolve", () => {
     ).toBe(path.join(MONO, "packages/ui/src/styles/globals.css"))
   })
 
+  // shadcn-ui/lint#108.
   test("a stylesheet's import takes a package's style export, a script's its JavaScript", () => {
     const app = path.join(PROJECT, "app")
     expect(
@@ -774,7 +775,7 @@ describe("a spartan components.json", () => {
     expect(uiDirectory(project, true)).toBeNull()
     uiDirectory(project, true)
     expect(warnings).toEqual([
-      `[@shadcn/lint] The componentsPath "libs/ui" in ${path.join(root, "components.json")} is not a directory, so design-system components imported from "@spartan-ng/helm" are not recognized in this project. Fix componentsPath, or set componentImports.`,
+      `[shadcn-lint-angular] The componentsPath "libs/ui" in ${path.join(root, "components.json")} is not a directory, so design-system components imported from "@spartan-ng/helm" are not recognized in this project. Fix componentsPath, or set componentImports.`,
     ])
   })
 

@@ -229,10 +229,9 @@ function compilePattern(pattern: string, source = pattern, flags?: string) {
 
 const SLASHED = /^\/(.+)\/([a-z]*)$/
 
-// An Angular template names an element by its tag and its attributes, as
-// written, and a pattern matches one of those names the way
-// angular-eslint's options do: `/^hlm/` is a regex, flags and all, and
-// any other pattern is the name itself.
+// A pattern matches an Angular element's tag or attribute name, as written,
+// the way angular-eslint's options do: `/^hlm/` is a regex, flags and all;
+// anything else is the name itself.
 function compileNamePattern(pattern: string): (name: string) => boolean {
   const slashed = SLASHED.exec(pattern)
   if (!slashed) return (name) => name === pattern
@@ -406,8 +405,8 @@ function buildContracts(
   const decideUncached = (component: string | null, token: string) =>
     verdictOf(component === null ? baseline : policyFor(component), token)
 
-  // `own` is the group to read a class the grammar does not know as, an
-  // Angular component's own CSS class by the properties its rules set.
+  // `own` is the group of a class the grammar cannot place: an Angular
+  // component's own CSS class, by the properties its rules set.
   const verdictOf = (
     policy: Policy,
     token: string,
@@ -435,17 +434,13 @@ function buildContracts(
     }
   }
 
-  // How an Angular template's names match the patterns, built for the
-  // first template: anywhere else "/Button/q" is a regex over component
-  // names, valid and no error.
+  // Built only for Angular templates: elsewhere "/Button/q" is a valid
+  // regex over component names, not a configuration error.
   let nameMatchers: ((name: string) => boolean)[] | null = null
   const compileNames = () =>
     (nameMatchers ??= (inputs ?? []).map((c) => compileNamePattern(c.pattern)))
 
-  // An Angular element is each of its names a contract matches: the tag,
-  // an attribute, a binding. A name takes the last contract matching it,
-  // as a component name does, so an element with no such name is no
-  // component at all.
+  // A name takes the last contract matching it, as a component name does.
   const identities = new Map<string, ElementIdentity[]>()
   const identitiesOf = (names: readonly string[]) => {
     const key = names.join("\u0000")
@@ -478,10 +473,8 @@ function buildContracts(
     return verdict
   }
 
-  // What an element with several matched names takes: by default a class
-  // any of their contracts allows, with `every` only one all of them do.
-  // Null when it passes; else each name that refused it, with its
-  // verdict, in the element's order.
+  // A class passes if any matched name's contract allows it, or with
+  // `every` all of them. Else each refusal, in the element's order.
   const decideElement = (
     matched: readonly ElementIdentity[],
     token: string,

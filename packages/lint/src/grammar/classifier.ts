@@ -383,7 +383,7 @@ export function classifierFor(fromFile?: string) {
       // A newer cn with a validator this version does not know.
       warnOnce(
         "classifier:fallback",
-        `The installed cn's grammar could not be loaded (${(error as Error).message}); using the grammar bundled with @shadcn/lint. Update @shadcn/lint.`
+        `The installed cn's grammar could not be loaded (${(error as Error).message}); using the grammar bundled with shadcn-lint-angular. Update shadcn-lint-angular.`
       )
       const fallback = bundled()
       classifier =
@@ -395,7 +395,7 @@ export function classifierFor(fromFile?: string) {
     if (unknown.length) {
       warnOnce(
         `groups:${unknown.join(",")}`,
-        `The installed cn declares class groups this version of @shadcn/lint has no category for: ${unknown.join(", ")}. They are treated as layout. Update @shadcn/lint.`
+        `The installed cn declares class groups this version of shadcn-lint-angular has no category for: ${unknown.join(", ")}. They are treated as layout. Update shadcn-lint-angular.`
       )
     }
   }

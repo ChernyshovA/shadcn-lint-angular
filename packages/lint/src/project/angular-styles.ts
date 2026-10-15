@@ -1,14 +1,9 @@
 // The classes an Angular component's own styles declare, for its
-// template the way an SFC's <style> block serves its own. The component
-// is the .ts whose @Component names the template: by templateUrl from
-// the template's directory, or, for an inline template, the file
-// angular-eslint's processor took it from.
-//
-// What cannot be read settles nothing on its own: a selector built from
-// an interpolation settles the prefix before it, and styles that are not
-// written out (`styles: [shared]`, a stylesheet that is missing, `&` with
-// no rule around it) settle every class in the template. Better quiet
-// than wrong, but not silent: `unread` says why, for a warning.
+// template, as an SFC's <style> block serves its own. Better quiet than
+// wrong, but not silent: styles that cannot be read (`styles: [shared]`,
+// a missing stylesheet, `&` with no rule around it) accept every class,
+// and `unread` says why, for a warning; an interpolated selector accepts
+// the prefix before it.
 
 import * as fs from "node:fs"
 import * as path from "node:path"
@@ -19,7 +14,7 @@ import { parseSource } from "./parser"
 import { packageRoot, readJsonc, resolveFile } from "./resolve"
 import { parseClassSelectors } from "./theme"
 
-// Why styles settle every class: `reason` is a phrase, `where` the
+// Why styles accept every class: `reason` is a phrase, `where` the
 // stylesheet it is in when that is not the component's own file.
 export type Unread = {
   reason: string
@@ -31,26 +26,21 @@ export type Unread = {
 export type OwnClasses = {
   has: (name: string) => boolean
   unread: Unread | null
-  // The classes the project's own stylesheets name, past a package's
-  // and those an interpolation builds.
+  // The classes the project's own stylesheets write out, not a package's.
   names?: () => Iterable<string>
-  // The properties the rules a class is in set. Null for a class they do
-  // not declare, one whose rules set what cannot be read as a property,
-  // or one they may declare otherwise too, as an interpolated selector
-  // may.
+  // The properties a class's rules set. Null when they may not all be
+  // known: an undeclared class, an opaque declaration, an interpolated
+  // selector that may match it too.
   propertiesOf?: (name: string) => readonly string[] | null
 }
 
 type Declared = {
   classes: Set<string>
-  // Those of them a stylesheet of the project's own writes.
   local: Set<string>
   prefixes: string[]
-  // Those a selector puts on the component's own element, `:host(.x)`,
-  // which reach it where another template uses the component.
+  // Those put on the component's own element, `:host(.x)`.
   host: Set<string>
   hostPrefixes: string[]
-  // By class, what the rules it is in set (OwnClasses.propertiesOf).
   properties: Map<string, Set<string>>
   // What nesting has grown the selectors read so far by (MAX_NESTED).
   nested: number
@@ -89,9 +79,8 @@ const EMPTY = declaredNothing()
 
 type Kept<T> = Map<string, { mtimeMs: number | null; value: T }>
 
-// An answer about a file or a directory, kept while its mtime stands:
-// one for each path, however many times an editor saves it, since the
-// ESLint server of an editor outlives many saves.
+// Keyed by path alone, its mtime compared: an editor's ESLint server
+// outlives many saves, and a key per mtime would keep every version.
 function whileUnchanged<T>(kept: Kept<T>, at: string, compute: () => T): T {
   const mtimeMs = mtimeOf(at)
   const hit = kept.get(at)
@@ -103,7 +92,6 @@ function whileUnchanged<T>(kept: Kept<T>, at: string, compute: () => T): T {
 
 const texts: Kept<string | null> = new Map()
 
-// A file's text, or null for one that cannot be read.
 export function readText(file: string) {
   return whileUnchanged(texts, file, () => {
     try {
@@ -116,7 +104,6 @@ export function readText(file: string) {
 
 const listings: Kept<string[]> = new Map()
 
-// What a directory holds, or nothing for one that cannot be read.
 export function listing(dir: string) {
   return whileUnchanged(listings, dir, () => {
     try {
@@ -195,11 +182,10 @@ const keyed = (property: any, name: string) =>
   property.key?.type === "Identifier" &&
   property.key.name === name
 
-// Whether angular-eslint's processor hands this decorator's template over
-// as a file of its own, and so counts it in the names it gives them
-// (processors.js, preprocessComponentFile): a decorator given only its
-// options, with no `templateUrl`, whose first `template` is written
-// `template: …` as a string or template literal that is not empty.
+// Whether angular-eslint's processor hands this template over as a file,
+// and so counts it (processors.js, preprocessComponentFile): one options
+// argument, no `templateUrl`, and a first `template: …` that is a string
+// or template literal, not empty.
 function handedOver(call: any) {
   if (call.arguments?.length !== 1) return false
   const properties = call.arguments[0].properties ?? []
@@ -267,7 +253,6 @@ function componentsIn(file: string): ComponentMeta[] {
         }
         for (const property of object.properties) {
           if (property.type !== "Property") {
-            // A spread can carry any of them.
             meta.spreads = true
             meta.unread ??= `the decorator spreads ${shown(property)}`
             continue
@@ -323,9 +308,9 @@ function ownersOf(template: string) {
   return out
 }
 
-// An inline template's component: the nth inline template of the .ts it
-// sits in, or every one when its number cannot be read. Null for a
-// template in a file of its own.
+// An inline template's component: the processor names the nth one
+// `inline-template-<file>-<n>.component.html`; every one when no number
+// can be read. Null for a template in a file of its own.
 function inlineMetasOf(template: string, physical: string) {
   if (template === physical || !/\.[cm]?ts$/.test(physical)) return null
   const metas = componentsIn(physical).filter((meta) => meta.inline)
@@ -334,8 +319,8 @@ function inlineMetasOf(template: string, physical: string) {
   return own ? [own] : metas
 }
 
-// The components a template belongs to. `template` is the file the
-// linter was handed, `physical` the file on disk.
+// `template` is the file the linter was handed, `physical` the file on
+// disk: the component's .ts when the template is inline.
 export function templateOwners(template: string, physical: string) {
   const inline = inlineMetasOf(template, physical)
   return inline
@@ -343,13 +328,11 @@ export function templateOwners(template: string, physical: string) {
     : ownersOf(path.resolve(physical))
 }
 
-// A stylesheet being read: the files already read, and the include
-// paths a bare Sass import is looked for in after its own directory.
 type Reading = { seen: Set<string>; includes: readonly string[] }
 
-// A Sass or Less import, as the files it may name: beside the file,
-// then in each include path, then, for a bare name, in the package it
-// names, as Angular resolves `@use "font-awesome"`.
+// A Sass or Less import, as the files it may name: beside the file, then,
+// for a bare name, in each include path and in the package it names, as
+// Angular resolves `@use "font-awesome"`.
 function importCandidates(
   from: string,
   spec: string,
@@ -424,11 +407,9 @@ const HOLE = "\u0000"
 const UNKNOWN = "\u0001"
 
 // Comments out, strings kept as written: `content: " // x"` holds no
-// comment. A line comment starts where a token may, after a space or a
-// brace, so `url(//cdn.test/a.css)` is no comment either. The last
-// character written is kept aside: reading it back from the text being
-// built flattens that text each time, which made a large stylesheet's
-// comments take seconds.
+// comment. A line comment starts where a token may, after a space, `;` or
+// a brace, so `url(//cdn.test/a.css)` is no comment either. `last` is kept
+// aside: reading the end of `out` flattens it, quadratic on a large file.
 function stripComments(css: string) {
   let out = ""
   let last = ""
@@ -468,10 +449,9 @@ function stripComments(css: string) {
 const QUOTED = /^(["'])((?:\\.|(?!\1)[^\\])*)\1/s
 const URL = /^url\(\s*(?:(["'])((?:\\.|(?!\1)[^\\])*)\1|([^\s"'()]*))\s*\)/s
 
-// The URLs an import statement names, `#{…}` read as a hole: the one
-// right after @use or @forward, what follows it being `as`, `with (…)`,
-// `show` or `hide`; each of @import's list, a string or `url(…)`, before
-// its media query; and the one meta.load-css loads.
+// The URLs a statement imports: the one right after @use or @forward
+// (`as`, `with (…)`, `show`, `hide` follow it); each string or `url(…)`
+// of @import's list, before its media query; the one meta.load-css loads.
 function importsOf(statement: string): string[] {
   const at = /^@(import|use|forward)\s+/.exec(statement)
   if (!at) {
@@ -539,11 +519,10 @@ function compoundsOf(selector: string) {
   return out
 }
 
-// What a rule's selector is to the rules nested in it. `&` glues them to
-// its first or its last compound; every class between those is declared
-// already, with the rule itself. Kept as those two, the selectors of a
-// rule that differ only between them are one parent, so that `.a, .b`
-// nested in itself twenty times over is four parents, not a million.
+// What a rule's selector is to the rules nested in it: `&` glues them to
+// its first or last compound, and the classes between are declared with
+// the rule itself. Selectors that differ only between are one parent, so
+// `.a, .b` nested in itself twenty times is four parents, not a million.
 function asParent(selector: string) {
   const compounds = compoundsOf(selector)
   return compounds.length > 2
@@ -551,14 +530,11 @@ function asParent(selector: string) {
     : selector
 }
 
-// The most the selectors of a stylesheet's rules may grow by, nested in
-// the rules around them, with those of what it imports, read at once: a
-// rule nested in none grows by nothing, so a vendor stylesheet of flat
-// rules is read whatever its size. `&` twice in one compound,
-// `&:not(&)`, doubles a selector at each level, and `&-x, &-y` doubles
-// how many there are, each longer than the last; rules side by side
-// under such a one add up. The styles of the projects this was tried on
-// came to under 100,000 characters read at once, a few hundred a rule.
+// The most a stylesheet's selectors, with its imports', may grow by when
+// nested: a flat rule grows by nothing, so a vendor stylesheet is read at
+// any size. `&:not(&)` doubles a selector at each level, `&-x, &-y` how
+// many there are, and rules side by side under such a one add up. Real
+// apps' styles grow by under 100,000 characters, a few hundred a rule.
 const MAX_NESTED = 1_000_000
 
 // The selectors of a rule nested in rules with these selectors, or null
@@ -599,10 +575,8 @@ function shownSelector(selector: string) {
   return line.length > 60 ? `${line.slice(0, 60)}…` : line
 }
 
-// A rule's selectors declared, what the rules nested in it nest in, and
-// the classes its declarations set properties for: none, in rules whose
-// selectors grow by more than can be read, which leave the stylesheet
-// unread.
+// Declares a rule's selectors, and returns the parents of the rules nested
+// in it and the classes its declarations set; null past MAX_NESTED.
 function enter(
   parents: readonly string[],
   selector: string,
@@ -663,9 +637,8 @@ const classNamesIn = (text: string) =>
 // The compound selectors that put classes on the component's own element:
 // `:host(.x)`, `:host.x` (`&.x` inside `:host`), and `:host-context(.y).x`,
 // whose context may be the element itself. Angular's emulation compiles
-// each to `.x[_nghost-…]` (ShadowCss in @angular/compiler).
-// One nested in another's parentheses is part of that one, so the
-// selector is read once.
+// each to `.x[_nghost-…]` (ShadowCss in @angular/compiler). One inside
+// another's parentheses is part of that one: the selector is read once.
 function hostCompoundsOf(selector: string) {
   const out: string[] = []
   const host = /:host(?:-context)?(?![\w-])/g
@@ -831,10 +804,9 @@ function declareStyles(
 
 const MAX_STYLESHEETS = 64
 
-// An import this cannot read may declare any class: it leaves the
-// stylesheet unread, as a selector it cannot read does. Sass's own
-// modules declare none, and a stylesheet a URL names is the browser's to
-// load, not the build's.
+// An import this cannot read may declare any class, so it leaves the
+// stylesheet unread. Sass's own modules declare none, and a stylesheet a
+// URL names is the browser's to load, not the build's.
 function declareImport(
   from: string,
   spec: string,
@@ -845,8 +817,7 @@ function declareImport(
   const unread = (reason: string) => {
     declared.unread ??= { reason, where: from }
   }
-  // `~pkg` is webpack's spelling of a package import, which this does
-  // not resolve.
+  // `~pkg` is webpack's spelling of a package import.
   if (spec.startsWith("~")) {
     unread(`the import "${spec}" uses \`~\`, which is not resolved`)
     return
@@ -971,8 +942,7 @@ export function angularGlobalClassesOf(fromFile: string): OwnClasses | null {
 
 // A global style that names a package, `"styles": ["tailwindcss"]`, as
 // Angular's stylesheet bundler resolves it from the workspace root: the
-// package's stylesheet, as an import of it finds one, never its
-// JavaScript.
+// package's stylesheet, never its JavaScript.
 function packageSheet(dir: string, input: string) {
   if (input.startsWith(".") || path.isAbsolute(input)) return null
   return (
@@ -982,9 +952,6 @@ function packageSheet(dir: string, input: string) {
   )
 }
 
-// `template` is the file the linter was handed; `physical` the file on
-// disk, a component's .ts when its template is inline. The processor
-// names the nth inline template `inline-template-<file>-<n>.component.html`.
 export function angularOwnClassesOf(
   template: string,
   physical: string
@@ -1010,11 +977,9 @@ export function angularOwnClassesOf(
   return toOwnClasses(declared)
 }
 
-// The classes the styles of a component select on its own element, as
-// `:host(.row-fill)` does: where another template uses the component,
-// its element there wears them. Every class when its styles cannot be
-// read, as in its own template. Null when the file declares no such
-// component.
+// The classes a component's styles put on its own element, `:host(.x)`,
+// which it wears where another template uses it. Null when the file
+// declares no such component.
 export function angularHostClassesOf(
   file: string,
   name: string

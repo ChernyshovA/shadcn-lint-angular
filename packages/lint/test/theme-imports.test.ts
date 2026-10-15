@@ -144,7 +144,7 @@ describe("no-raw-colors with a theme from a package", () => {
       ],
     })
     expect(warnings).toEqual([
-      "[@shadcn/lint] settings.shadcn.themeImports has an invalid pattern, ^acme-ui/(; it is ignored.",
+      "[shadcn-lint-angular] settings.shadcn.themeImports has an invalid pattern, ^acme-ui/(; it is ignored.",
     ])
   })
 })

@@ -1,20 +1,26 @@
 {
-  "name": "@shadcn/lint",
-  "version": "0.2.1",
-  "description": "A programmable agent-first linter for Tailwind design systems.",
+  "name": "shadcn-lint-angular",
+  "version": "0.1.0",
+  "description": "@shadcn/lint with Angular template support: a programmable agent-first linter for Tailwind design systems.",
   "license": "MIT",
   "author": {
-    "name": "shadcn",
-    "url": "https://twitter.com/shadcn"
+    "name": "ChernyshovA",
+    "url": "https://github.com/ChernyshovA"
   },
+  "contributors": [
+    {
+      "name": "shadcn",
+      "url": "https://twitter.com/shadcn"
+    }
+  ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/shadcn-ui/lint.git",
+    "url": "git+https://github.com/ChernyshovA/shadcn-lint-angular.git",
     "directory": "packages/lint"
   },
-  "homepage": "https://github.com/shadcn-ui/lint#readme",
+  "homepage": "https://github.com/ChernyshovA/shadcn-lint-angular#readme",
   "bugs": {
-    "url": "https://github.com/shadcn-ui/lint/issues"
+    "url": "https://github.com/ChernyshovA/shadcn-lint-angular/issues"
   },
   "type": "module",
   "publishConfig": {
@@ -43,6 +49,9 @@
   },
   "keywords": [
     "shadcn",
+    "angular",
+    "angular-eslint",
+    "spartan",
     "lint",
     "eslint",
     "oxlint",

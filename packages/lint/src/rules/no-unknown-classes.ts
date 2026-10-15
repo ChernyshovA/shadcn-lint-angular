@@ -44,9 +44,8 @@ import { colorValueOf } from "./no-raw-colors"
 import { policySchema, recognitionSchema } from "./policy-schema"
 import { withSettings } from "./settings"
 
-// Styles that cannot be read settle every class in the template, and on
-// the component's element in the templates that use it, so the rule says
-// once per component that it is not checking there.
+// Unread styles settle every class they could declare: say so once per
+// component rather than fall silent.
 function warnUnread(context: any, own: OwnClasses) {
   const { unread } = own
   if (unread?.file) {
@@ -58,7 +57,6 @@ function warnUnread(context: any, own: OwnClasses) {
   return own
 }
 
-// Host bindings in the component's .ts are judged by the same styles.
 function angularOwnClasses(context: any, filename: string, host = false) {
   return warnUnread(
     context,
@@ -68,9 +66,8 @@ function angularOwnClasses(context: any, filename: string, host = false) {
   )
 }
 
-// The global stylesheets of an Angular project serve every Angular file
-// in it, and settle every class when they cannot be read. A React file in
-// the same workspace is not styled by them.
+// A project's global stylesheets serve its Angular files, not a React file
+// in the same workspace.
 function angularGlobalClasses(context: any, filename: string) {
   if (!isAngularCode(context)) return null
   const global = angularGlobalClassesOf(filename)
@@ -93,14 +90,11 @@ const MESSAGES = {
   unknownClassSuggest:
     '"{{className}}" is not a class this project\'s Tailwind knows, so no CSS is generated for it. Did you mean "{{suggestion}}"?',
   // A host's element sits in the template of whichever component renders
-  // it, so that component's styles reach it, and which one that is is
-  // not known here.
+  // it, whose styles reach it and are not known here.
   unknownHostClass:
     '"{{className}}" is not a class this project\'s Tailwind knows, so no CSS is generated for it. Fix the spelling, or declare it with @utility in {{file}}. If the stylesheet of a component that renders this host styles it, add it to allow.',
   unknownHostClassSuggest:
     '"{{className}}" is not a class this project\'s Tailwind knows, so no CSS is generated for it. Did you mean "{{suggestion}}"? If the stylesheet of a component that renders this host styles it, add it to allow.',
-  // A slip from a class the component's own styles or the global ones
-  // declare, in an Angular template.
   unknownCssClassSuggest:
     '"{{className}}" is not a class this project\'s Tailwind knows or its CSS declares, so no CSS is generated for it. Did you mean "{{suggestion}}", which its CSS declares?',
   unknownVariant:
@@ -148,8 +142,7 @@ export const noUnknownClasses = {
     const { groupOf } = projectClassifierFor(filename)
     const known = knownClassesFor(filename)
     // A single-file component's own <style> block declares classes for
-    // its template the way the theme CSS does for everything, and so do
-    // an Angular component's styles.
+    // its template the way the theme CSS does for everything.
     const ownClasses: { has: (name: string) => boolean } = isSfc(filename)
       ? styleClassesOf(context.sourceCode?.text ?? "")
       : readerFor(context) === angularReader
@@ -169,17 +162,15 @@ export const noUnknownClasses = {
     const isTailwindColor = (token: string) =>
       (!prefix || token.startsWith(`${prefix}:`)) && isColor(token)
 
-    // What the project's CSS settles without asking Tailwind.
     // A host binding's classes land on the component's own element.
     let hostClasses: OwnClasses | undefined
     const ownClassesOf = (site: { node: any }) =>
       hostBindingOf(site.node)
         ? (hostClasses ??= angularOwnClasses(context, filename, true))
         : ownClasses
-    // A class on the element of a component the template uses may be one
-    // that component's styles select on its host, `:host(.x)`. Finding the
-    // component reads the template's scope, so it is asked only of a class
-    // nothing else knows.
+    // A class on a component's element may be one its styles select as
+    // `:host(.x)`. Finding the component reads the template's scope, so it
+    // is asked only of a class nothing else knows.
     const angular = readerFor(context) === angularReader
     const helpers = new Set([
       ...DEFAULT_MERGE_FUNCTIONS,
@@ -211,6 +202,7 @@ export const noUnknownClasses = {
             )
         : () => false
 
+    // What the project's CSS settles without asking Tailwind.
     const settled = (token: string, own = ownClasses) => {
       const base = normalizeClass(token)
       if (!base) return true
@@ -230,10 +222,9 @@ export const noUnknownClasses = {
       return utilityPrefixes.some((prefix) => bare.startsWith(prefix))
     }
 
-    // In an Angular template, a class one slip from one the component's
-    // styles or the global ones declare, when Tailwind offers none: one
-    // the project's own stylesheets write, not a library's, whose
-    // hundreds of icon names are a slip from many a word.
+    // When Tailwind offers none, a slip from a class the project's own
+    // stylesheets write; not a library's, whose hundreds of icon names are a
+    // slip from many a word.
     type Declares = {
       has: (name: string) => boolean
       names?: OwnClasses["names"]

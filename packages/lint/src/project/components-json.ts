@@ -19,10 +19,9 @@ export type Project = {
   cssFile: string | null
 }
 
-// spartan's CLI schema (libs/cli/src/utils/config.ts): the directory it
-// generates components into, and the prefix they are imported by, and
-// the fields that are not strings, read as spartan's defaults.
-export type Spartan = {
+// spartan's CLI schema (libs/cli/src/utils/config.ts). `ignored`: the
+// fields that are not strings, read as spartan's defaults.
+type Spartan = {
   componentsPath: string
   importAlias: string
   ignored: (keyof typeof SPARTAN_DEFAULTS)[]
@@ -52,10 +51,9 @@ function readProject(file: string): Project | null {
   }
 }
 
-// The fields of spartan's schema that the schemas of shadcn, shadcn-vue
-// and shadcn-svelte do not have. Theirs have aliases, which shadcn's
-// requires and spartan's CLI never writes, so a file with aliases is read
-// as upstream reads it.
+// Fields of spartan's schema that shadcn's, shadcn-vue's and
+// shadcn-svelte's lack. Theirs have aliases, which spartan's CLI never
+// writes, so a file with aliases is read as shadcn's.
 const SPARTAN_KEYS = [
   "componentsPath",
   "importAlias",
@@ -150,10 +148,8 @@ export function resolveAlias(project: Project, alias: string) {
 
 // Where the design-system components live. An alias that resolves to
 // nothing is reported once: silently recognizing no components is the
-// failure mode an enforcement tool must never have. spartan's schema is
-// read for Angular code (sites/readers/angular-code.ts): a React, Vue or
-// Svelte file, and a file outside an Angular project, read the file as
-// upstream does.
+// failure mode an enforcement tool must never have.
+// spartan's schema is read for Angular code only.
 export function uiDirectory(project: Project, angular = false) {
   if (angular && project.file && project.spartan) {
     const { componentsPath, importAlias, ignored } = project.spartan

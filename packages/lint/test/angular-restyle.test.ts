@@ -54,7 +54,6 @@ function lint(
 const messages = (code: string, options?: unknown) =>
   lint(code, options).map((m) => m.message)
 
-// The class each finding names.
 const reported = (code: string, options?: unknown) =>
   lint(code, options).map((m) => m.message.split('"')[1])
 
@@ -87,9 +86,7 @@ describe("no-restyle in Angular templates", () => {
 
   // An input such as styleClass hands its classes to the directive that
   // takes it, which puts them where it likes: inside its component, or on
-  // the element PrimeNG's StyleClass targets. The element's contracts
-  // judge what lands on the element itself; an input, the contract of
-  // the directive that takes it (angular-input-owners.test.ts).
+  // the element PrimeNG's StyleClass targets.
   describe("the classes an element wears", () => {
     const options = {
       allow: ["layout"],
@@ -235,10 +232,8 @@ describe("no-restyle in Angular templates", () => {
     ])
   })
 
-  // What a class of the component's own styles changes is what their
-  // rules set, as an @utility's body says: `.orders-card { max-width }` is
-  // layout. Anything else in a rule it is in, on it or on what it holds,
-  // and the grammar still cannot tell.
+  // A class of the component's own styles changes what its rules set, as
+  // an @utility's body says: `.orders-card { max-width }` is layout.
   describe("a class the component's own styles declare", () => {
     let dir = ""
     beforeEach(() => {
@@ -281,8 +276,8 @@ export class OrdersComponent {}`
       ).toEqual([])
     })
 
-    // What Tailwind's layout utilities set, text-center's text-align and
-    // whitespace-nowrap's white-space among them, past a vendor prefix.
+    // text-center and whitespace-nowrap are layout utilities, so text-align
+    // and white-space are layout; a vendor prefix is read past.
     it("is layout by the properties layout utilities set", () => {
       expect(
         judged(
@@ -295,8 +290,6 @@ export class OrdersComponent {}`
       ).toEqual([])
     })
 
-    // A property no layout utility sets: what paints, or one the grammar
-    // has in an appearance category.
     it("is not, where a rule it is in sets a property no layout utility sets", () => {
       const properties = [
         "background-image: url(a.png)",
@@ -458,7 +451,6 @@ export class OrdersComponent {}`
       expect(around(code)).toEqual([
         "margin here or spacing on <div hlmCardContent>",
       ])
-      // With all, an element takes it only when every contract does.
       expect(around(code, "all")).toEqual([
         "margin here or gap on a plain wrapper around it",
       ])
@@ -672,8 +664,7 @@ describe("variants of the directive a name stands for", () => {
   })
 
   // spartan's HlmTooltip calls hlm in its providers and at module level,
-  // for the tooltip it opens. Only its class body styles its element: the
-  // constructor, a field's initializer, a method.
+  // for the tooltip it opens, not for its element.
   it("counts a mergeFunctions call in the directive's class body, not in its decorator or module", () => {
     const tags = (code: string, shared: Record<string, unknown>) =>
       lintAt(code, PAGE, options, shared).map(
@@ -837,9 +828,8 @@ describe("variants of the directive a name stands for", () => {
   })
 })
 
-// Nx keeps the workspace's paths in a root tsconfig.base.json, with no
-// tsconfig.json beside it: an import through them is followed, so a
-// directive that styles nothing is known for one.
+// shadcn-ui/lint#111: Nx keeps the workspace's paths in a root
+// tsconfig.base.json, with no tsconfig.json beside it.
 describe("a directive imported through an Nx tsconfig.base.json", () => {
   let root: string
   function write(name: string, source: string) {
@@ -998,7 +988,6 @@ describe("what is kept of a directive's source", () => {
   })
 })
 
-// hostDirectives that meet again, or come back, are read once each.
 describe("hostDirectives that branch and loop", () => {
   let root: string
   const write = (name: string, source: string) => {
@@ -1096,8 +1085,7 @@ describe("what makes a directive one that styles its element", () => {
         dts("KitAttrClass", `"[kitAttrClass]"`),
         dts("KitClassName", `"[kitClassName]"`),
         dts("KitPlainSub", `"[kitPlainSub]"`, " extends KitPlain"),
-        // Classes Angular does not declare: a helper, an @Injectable such
-        // as NgRx's ComponentStore, and those that extend a directive.
+        // Classes Angular does not declare, some extending a directive.
         `export declare class KitHelper { destroy(): void; static ɵprov: i0.ɵɵInjectableDeclaration<KitHelper>; }`,
         `export declare abstract class KitAbstractPlain<T> { value: T }`,
         `export declare class KitHelperOverStyled extends KitStyled { }`,
@@ -1239,8 +1227,6 @@ describe("what makes a directive one that styles its element", () => {
     ).toEqual(["hlmOverStyled", "hlmUnread", "hlmMixed"])
   })
 
-  // In a template too: `[className]` sets the element's class, as
-  // `[attr.class]` does.
   it("judges what a template binds to className on the element", () => {
     expect(
       lint(
@@ -1274,9 +1260,8 @@ describe("what makes a directive one that styles its element", () => {
   })
 })
 
-// A cva axis written with a type on it, as angular-love writes
-// `variant: <Record<AlButtonVariant, string>>{ … }`. In a React file it is
-// read as upstream reads it.
+// A cva axis written with a type cast, as in
+// `variant: <Record<ButtonVariant, string>>{ … }`.
 describe("a cva axis with a type assertion", () => {
   const cva = (axis: (object: string) => string) =>
     [

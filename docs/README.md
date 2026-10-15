@@ -8,6 +8,7 @@ Start with [Get started](../README.md#get-started) to set up ESLint or Oxlint.
 - [Vue](./vue.md): ESLint with `vue-eslint-parser`, and what Oxlint can and cannot read.
 - [Svelte](./svelte.md): ESLint with `svelte-eslint-parser`, and what Oxlint can and cannot read.
 - [Angular](./angular.md): ESLint with `@angular-eslint/template-parser`, inline templates, and component styles.
+  [How it reads](./angular-how-it-works.md): host bindings, component and global styles, and which directive a name stands for.
 
 ## Guides
 

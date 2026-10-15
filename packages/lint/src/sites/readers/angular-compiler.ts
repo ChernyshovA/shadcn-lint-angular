@@ -1,7 +1,6 @@
-// The compiler angular-eslint bundles. Every Angular project that lints
-// with angular-eslint has it, so it is an optional peer: looked up from
-// the file being linted and the angular-eslint its project installs, the
-// version its templates are parsed with, then from this package.
+// The compiler angular-eslint bundles, an optional peer: every project
+// linting with angular-eslint has it. Looked up from the linted file
+// first, so it is the version its templates are parsed with.
 
 import { createRequire } from "node:module"
 import * as path from "node:path"
@@ -10,8 +9,8 @@ const require = createRequire(import.meta.url)
 
 const NAME = "@angular-eslint/bundled-angular-compiler"
 
-// By directory, what was found, and when; none found is looked for again
-// after a while, as a compiler installed mid-session is there to find.
+// A miss is looked for again after a while, so a compiler installed
+// mid-session is found.
 const byDirectory = new Map<string, { compiler: any; at: number }>()
 const RETRY_AFTER = 5000
 
@@ -35,7 +34,6 @@ function load(directory: string) {
   return null
 }
 
-// Null when neither the file's project nor this package has it.
 export function angularCompiler(file: string | null | undefined) {
   const directory = file ? path.dirname(path.resolve(file)) : process.cwd()
   const found = byDirectory.get(directory)
