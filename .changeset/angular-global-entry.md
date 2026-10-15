@@ -1,0 +1,5 @@
+---
+"@shadcn/lint": minor
+---
+
+Find an Angular app's Tailwind entry among its global styles, in `angular.json` or an Nx `project.json`: the one that imports Tailwind, whole or as its separate stylesheets, together with a theme (`@theme`, `@plugin`, `@utility`, `@custom-variant` or `@config`), Sass included, as spartan's CLI writes `src/styles.scss` beside the `src/tailwind.css` of `ng add tailwindcss`. A Sass stylesheet with what Tailwind's compiler reads otherwise, a `//` comment, an interpolation, `@use "tailwindcss"` or a partial, is not taken, and that is said once; so is a theme read from a stylesheet that holds none while another global one does, and a Sass entry the settings or `components.json` name that cannot be read as written. A project that names no styles of its own takes another project's entry only when the stylesheet found under it holds no theme. The entry is chosen so for Angular code, a template or a script of an Angular project; React, Vue and Svelte files, and files outside an Angular project, find their entry as before.

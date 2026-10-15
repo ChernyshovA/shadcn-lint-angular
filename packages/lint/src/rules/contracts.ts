@@ -89,9 +89,13 @@ function stripModifier(base: string, classifier: Classifier) {
   return base.replace(/\/[\w.%]+$/, "")
 }
 
-function matches(set: EntrySet, token: string, classifier: Classifier) {
+function matches(
+  set: EntrySet,
+  token: string,
+  classifier: Classifier,
+  group = classifier.groupOf(token)
+) {
   if (!set.source.length) return false
-  const group = classifier.groupOf(token)
   if (group && set.groups.has(group)) return true
   const category = categoryOf(group)
   if (category && set.categories.has(category)) return true
@@ -402,8 +406,14 @@ function buildContracts(
   const decideUncached = (component: string | null, token: string) =>
     verdictOf(component === null ? baseline : policyFor(component), token)
 
-  const verdictOf = (policy: Policy, token: string): Verdict => {
-    const group = classifier.groupOf(token)
+  // `own` is the group to read a class the grammar does not know as, an
+  // Angular component's own CSS class by the properties its rules set.
+  const verdictOf = (
+    policy: Policy,
+    token: string,
+    own: string | null = null
+  ): Verdict => {
+    const group = classifier.groupOf(token) ?? own
     // A marker (group/name, peer) is layout; a name the grammar cannot
     // classify is neither layout nor appearance.
     const category =
@@ -413,10 +423,10 @@ function buildContracts(
     const words = (table: typeof policy.message) =>
       table ? (table[category] ?? table.default ?? null) : null
     const message = words(policy.message) ?? words(baseline.message)
-    if (matches(policy.deny, token, classifier)) {
+    if (matches(policy.deny, token, classifier, group)) {
       return { kind: "denied", entries: policy.deny.source, category, message }
     }
-    if (matches(policy.allow, token, classifier)) return { kind: "ok" }
+    if (matches(policy.allow, token, classifier, group)) return { kind: "ok" }
     return {
       kind: "not-allowed",
       entries: policy.allow.source,
@@ -457,12 +467,12 @@ function buildContracts(
   }
 
   const elementVerdicts = new Map<string, Verdict>()
-  const verdictAt = (contract: number, token: string) => {
-    const key = `${contract}\u0000${token}`
+  const verdictAt = (contract: number, token: string, own: string | null) => {
+    const key = `${contract}\u0000${token}\u0000${own ?? ""}`
     let verdict = elementVerdicts.get(key)
     if (!verdict) {
       if (elementVerdicts.size > 50_000) elementVerdicts.clear()
-      verdict = verdictOf(compiled[contract], token)
+      verdict = verdictOf(compiled[contract], token, own)
       elementVerdicts.set(key, verdict)
     }
     return verdict
@@ -475,14 +485,15 @@ function buildContracts(
   const decideElement = (
     matched: readonly ElementIdentity[],
     token: string,
-    every = false
+    every = false,
+    own: string | null = null
   ) => {
     const refused: {
       verdict: Exclude<Verdict, { kind: "ok" }>
       name: string
     }[] = []
     for (const { name, contract } of matched) {
-      const verdict = verdictAt(contract, token)
+      const verdict = verdictAt(contract, token, own)
       if (verdict.kind !== "ok") refused.push({ verdict, name })
       else if (!every) return null
     }

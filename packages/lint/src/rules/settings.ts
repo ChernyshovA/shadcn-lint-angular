@@ -6,8 +6,10 @@
 
 import * as path from "node:path"
 
+import { noteAngularCode } from "../project/angular-files"
 import { setEntryPoint, setThemeImports } from "../project/theme"
 import { warnOnce } from "../project/warn"
+import { isAngularCode } from "../sites/readers/angular-code"
 import { fileOf } from "./messages"
 
 const SHARED = [
@@ -72,10 +74,15 @@ function recordThemeImports(context: any, settings: any) {
 function recordEntryPoint(context: any, settings: any) {
   const value =
     settings && typeof settings === "object" ? settings.entryPoint : null
-  if (value != null && (typeof value !== "string" || !value)) {
+  if (value != null && typeof value !== "string") {
     warnOnce(
       "settings:entryPoint",
       "settings.shadcn.entryPoint must be a string; it is ignored."
+    )
+  } else if (value === "") {
+    warnOnce(
+      "settings:entryPoint:empty",
+      "settings.shadcn.entryPoint is empty, and an empty path names no stylesheet; it is ignored."
     )
   }
   const written = typeof value === "string" && value ? value : null
@@ -95,6 +102,7 @@ export function withSettings<T extends Record<string, unknown>>(
   options: T
 ) {
   const settings = context.settings?.shadcn
+  noteAngularCode(fileOf(context), isAngularCode(context))
   recordThemeImports(context, settings)
   recordEntryPoint(context, settings)
   if (!settings || typeof settings !== "object") return options

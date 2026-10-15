@@ -478,20 +478,21 @@ export const noInlineStyles = {
         }
       },
     }
+    const styleAttribute = (node: any) => {
+      if (reader.attributeName(node) !== "style") return
+      const value = reader.attributeValue(node)
+      if (isContainer(value)) {
+        check(value.expression, value.expression, new Set(), elementName(node))
+      } else if (value && readsStyleText(reader, value)) {
+        check(value, value, new Set(), elementName(node))
+      }
+    }
     for (const type of reader.attributes) {
+      addVisitor(visitors, type, styleAttribute)
+    }
+    for (const [type, held] of Object.entries(reader.heldAttributes ?? {})) {
       addVisitor(visitors, type, (node: any) => {
-        if (reader.attributeName(node) !== "style") return
-        const value = reader.attributeValue(node)
-        if (isContainer(value)) {
-          check(
-            value.expression,
-            value.expression,
-            new Set(),
-            elementName(node)
-          )
-        } else if (value && readsStyleText(reader, value)) {
-          check(value, value, new Set(), elementName(node))
-        }
+        for (const attribute of held(node)) styleAttribute(attribute)
       })
     }
     for (const [type, read] of Object.entries(reader.styleProperties ?? {})) {

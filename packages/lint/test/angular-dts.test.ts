@@ -89,6 +89,38 @@ describe("declarations of Angular 19 to 22", () => {
 })
 
 describe("the forms of a declaration file", () => {
+  // `never` is no selector, which no element matches; any other type
+  // that is no string is one this cannot read, which may match any.
+  it("tells a selector that is not written out from none", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lint-dts-selector-"))
+    const file = path.join(dir, "index.d.ts")
+    fs.writeFileSync(
+      file,
+      [
+        `import * as i0 from "@angular/core";`,
+        ...[
+          ["None", "never"],
+          ["Wide", "string"],
+          ["Built", "`kit-${string}`"],
+        ].map(
+          ([name, selector]) =>
+            `export declare class ${name} { static ɵdir: i0.ɵɵDirectiveDeclaration<${name}, ${selector}, never, {}, {}, never, never, true, never>; }`
+        ),
+      ].join("\n")
+    )
+    try {
+      const selector = (name: string) => {
+        const found = dtsLocal(file, name, new Set())
+        return found?.kind === "class" ? found.cls.directive?.selector : "?"
+      }
+      expect(selector("None")).toBe(null)
+      expect(selector("Wide")).toBe(undefined)
+      expect(selector("Built")).toBe(undefined)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it("reads inputs as Angular wrote them before 16", () => {
     const file = path.join(LIBRARIES, "node_modules/acme-kit/index.d.ts")
     const base = dtsLocal(file, "KitBase", new Set())
@@ -171,8 +203,10 @@ describe("a .d.ts whose declarations cannot be read", () => {
   })
 
   it("reads nothing of them, and says so once per package", () => {
+    // A component still, whose declaration says nothing this can read.
     expect(read("broken-kit", "BrokenCard")).toEqual({
       directive: null,
+      declared: true,
       module: null,
       pipe: false,
       base: null,

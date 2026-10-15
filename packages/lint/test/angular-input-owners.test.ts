@@ -9,7 +9,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import * as ngParser from "@angular-eslint/template-parser"
 import { Linter } from "eslint"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { plugin } from "../src/plugin"
 import {
@@ -18,7 +18,12 @@ import {
 } from "../src/project/angular-dts"
 import { resetFsMemo } from "../src/project/fs"
 import { resetWarnings, setWarningSink } from "../src/project/warn"
-import { setAngularCompilerForTests } from "../src/sites/readers/angular-compiler"
+import { setAngularCompilerForTests } from "./compiler-stub"
+
+// vi.mock runs before the imports above, so it imports the stub itself.
+vi.mock("../src/sites/readers/angular-compiler", async (importOriginal) =>
+  (await import("./compiler-stub")).mockAngularCompiler(importOriginal as any)
+)
 
 const FIXTURES = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -170,6 +175,7 @@ describe("the input of a directive a library's .d.ts declares", () => {
     ).toEqual(["bg-pink-500 on <kit-mixed>"])
   })
 
+  // Nor a file to add one to: its library defines them.
   it("leaves the message without variants: a compiled class has no cva to read", () => {
     expect(
       lintAt(
@@ -177,7 +183,7 @@ describe("the input of a directive a library's .d.ts declares", () => {
         contracts("/^p-/")
       ).map((m) => m.message)
     ).toEqual([
-      '"bg-pink-500" is not allowed on <p-dialog>: <p-dialog> owns its color. Use one of its variants. Add a new variant only if the design explicitly calls for a treatment none of them provides.',
+      '"bg-pink-500" is not allowed on <p-dialog>: <p-dialog> owns its color. Its library, not this project, defines what it offers.',
     ])
   })
 })

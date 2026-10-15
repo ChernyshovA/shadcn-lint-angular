@@ -80,7 +80,9 @@ Use `currentColor` with a text color class, or reference a theme variable:
 ````
 
 The rule checks literal strings in `fill`, `stroke`, `color`,
-`stopColor`, `floodColor`, and `lightingColor` on intrinsic elements.
+`stopColor`, `floodColor`, and `lightingColor` on intrinsic elements,
+and in `stop-color`, `flood-color`, and `lighting-color`, the way HTML,
+Vue and Svelte templates spell them.
 Class exceptions do not exempt these attributes.
 
 ### Allow an exception

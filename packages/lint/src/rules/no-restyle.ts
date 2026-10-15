@@ -15,7 +15,7 @@ import {
   configErrorVisitors,
   type Verdict,
 } from "./contracts"
-import { displayPath, fileOf, reporter } from "./messages"
+import { fileOf, reporter, shownPath } from "./messages"
 import { entriesSchema, recognitionSchema } from "./policy-schema"
 import { withSettings } from "./settings"
 
@@ -51,6 +51,9 @@ const SPACING_NEW_SIZE =
 
 const MESSAGES = {
   appearanceClass: `${NOT_ALLOWED} ${OWNS} Use one of its variants. Add a new variant only if the design explicitly calls for a treatment none of them provides.`,
+  // An Angular directive compiled into a library: no cva to read, and none
+  // to add a variant to.
+  appearanceClassCompiled: `${NOT_ALLOWED} ${OWNS} Its library, not this project, defines what it offers.`,
   appearanceClassWithVariants: `${NOT_ALLOWED} ${OWNS} Use a variant: {{variants}}. Add a new variant {{where}} ${NEW_VARIANT_GUARD}`,
   appearanceClassNoVariants: `${NOT_ALLOWED} ${OWNS} Add a variant {{where}} only if the design explicitly calls for this treatment.`,
   appearanceClassViaWrapper: `"{{className}}" is not allowed on <{{wrapper}}>: ${OWNS_VIA_WRAPPER} Use a variant{{variantsSuffix}}. Add a new variant {{where}} ${NEW_VARIANT_GUARD}`,
@@ -235,6 +238,8 @@ export type Subject = {
   // each with the file a new one goes in.
   read: () => {
     known: boolean
+    // A directive compiled into a library, which defines its variants.
+    compiled?: boolean
     variants: { file: string | null; names: string[] | null }
     sizes: { file: string | null; names: string[] | null }
   }
@@ -271,20 +276,20 @@ function componentJudge(
 
 // What a subject's findings share, read on its first one.
 function readSubject(subject: Subject, context: any) {
-  const { known, variants, sizes } = subject.read()
+  const { known, compiled, variants, sizes } = subject.read()
   // The file a message sends a new variant or size to. A package
   // recognized through componentImports is read for its variants, but no
   // message sends anyone into node_modules to add one.
   const at = (file: string | null) => {
     const shown = file && !NODE_MODULES.test(file) ? file : null
-    const shownPath = shown ? displayPath(shown, context) : ""
+    const where = shown ? shownPath(shown, context) : ""
     return {
-      file: shownPath,
-      where: shownPath ? `in ${shownPath}` : `to <${subject.component}>`,
+      file: where,
+      where: where ? `in ${where}` : `to <${subject.component}>`,
     }
   }
   return {
-    details: appearanceDetails(subject, known, variants.names),
+    details: appearanceDetails(subject, known, variants.names, compiled),
     sizes: sizes.names,
     variantsAt: at(variants.file),
     sizesAt: at(sizes.file),
@@ -339,12 +344,15 @@ function listOf(names: string[]) {
 function appearanceDetails(
   subject: Subject,
   known: boolean,
-  variants: string[] | null
+  variants: string[] | null,
+  compiled = false
 ) {
   const messageId = subject.wrapper
     ? "appearanceClassViaWrapper"
     : !known
-      ? "appearanceClass"
+      ? compiled
+        ? "appearanceClassCompiled"
+        : "appearanceClass"
       : variants
         ? "appearanceClassWithVariants"
         : "appearanceClassNoVariants"

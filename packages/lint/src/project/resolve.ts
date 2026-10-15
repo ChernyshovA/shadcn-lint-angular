@@ -36,13 +36,16 @@ const SOURCE_FOR_JS: Record<string, string[]> = {
   ".cjs": [".cts", ".ts"],
 }
 
-export function readJsonc(file: string) {
+// `bom` reads past a byte order mark, as Angular and Nx read their
+// workspace configs.
+export function readJsonc(file: string, options?: { bom?: boolean }) {
   let text: string
   try {
     text = fs.readFileSync(file, "utf-8")
   } catch {
     return null
   }
+  if (options?.bom && text.charCodeAt(0) === 0xfeff) text = text.slice(1)
   let out = ""
   let i = 0
   let quote: string | null = null

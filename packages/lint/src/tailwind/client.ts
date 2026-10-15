@@ -203,6 +203,16 @@ function verdictsFor(cssFile: string, candidates: string[]) {
   return memo!.verdicts
 }
 
+// Why Tailwind's compiler cannot build a stylesheet, or null when it
+// can, or when the oracle cannot tell. Asked before a stylesheet is
+// taken for the theme, so the caller says it, and the failure is not
+// remembered against a theme in use.
+export function buildFailureOf(cssFile: string) {
+  if (bridge === false || memos.has(cssFile)) return null
+  const answer = ask(cssFile, [])
+  return answer && !answer.ok ? answer.reason : null
+}
+
 export function unknownClasses(cssFile: string, candidates: string[]) {
   const verdicts = verdictsFor(cssFile, candidates)
   if (!verdicts) return null

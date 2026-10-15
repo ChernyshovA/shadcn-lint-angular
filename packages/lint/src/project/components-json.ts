@@ -20,8 +20,13 @@ export type Project = {
 }
 
 // spartan's CLI schema (libs/cli/src/utils/config.ts): the directory it
-// generates components into, and the prefix they are imported by.
-export type Spartan = { componentsPath: string; importAlias: string }
+// generates components into, and the prefix they are imported by, and
+// the fields that are not strings, read as spartan's defaults.
+export type Spartan = {
+  componentsPath: string
+  importAlias: string
+  ignored: (keyof typeof SPARTAN_DEFAULTS)[]
+}
 
 const cache = new Map<string, { mtimeMs: number; project: Project | null }>()
 
@@ -36,7 +41,7 @@ function readProject(file: string): Project | null {
     return null
   }
   const css = json.tailwind?.css
-  const spartan = json.aliases == null ? readSpartan(file, json) : null
+  const spartan = json.aliases == null ? readSpartan(json) : null
   return {
     dir,
     file,
@@ -58,25 +63,19 @@ const SPARTAN_KEYS = [
   "generateAs",
 ]
 
-const SPARTAN_DEFAULTS: Spartan = {
+const SPARTAN_DEFAULTS = {
   componentsPath: "libs/ui",
   importAlias: "@spartan-ng/helm",
 }
 
-function readSpartan(file: string, json: any): Spartan | null {
+function readSpartan(json: any): Spartan | null {
   if (!SPARTAN_KEYS.some((key) => key in json)) return null
-  const out = { ...SPARTAN_DEFAULTS }
-  for (const key of Object.keys(out) as (keyof Spartan)[]) {
+  const out: Spartan = { ...SPARTAN_DEFAULTS, ignored: [] }
+  for (const key of Object.keys(SPARTAN_DEFAULTS) as Spartan["ignored"]) {
     const value = json[key]
     if (value === undefined) continue
-    if (typeof value === "string" && value) {
-      out[key] = value
-      continue
-    }
-    warnOnce(
-      `${key}:${file}`,
-      `${key} in ${file} must be a non-empty string; it is ignored and spartan's default "${out[key]}" is read instead.`
-    )
+    if (typeof value === "string" && value) out[key] = value
+    else out.ignored.push(key)
   }
   return out
 }
@@ -151,10 +150,19 @@ export function resolveAlias(project: Project, alias: string) {
 
 // Where the design-system components live. An alias that resolves to
 // nothing is reported once: silently recognizing no components is the
-// failure mode an enforcement tool must never have.
-export function uiDirectory(project: Project) {
-  if (project.file && project.spartan) {
-    const { componentsPath, importAlias } = project.spartan
+// failure mode an enforcement tool must never have. spartan's schema is
+// read for Angular code (sites/readers/angular-code.ts): a React, Vue or
+// Svelte file, and a file outside an Angular project, read the file as
+// upstream does.
+export function uiDirectory(project: Project, angular = false) {
+  if (angular && project.file && project.spartan) {
+    const { componentsPath, importAlias, ignored } = project.spartan
+    for (const key of ignored) {
+      warnOnce(
+        `${key}:${project.file}`,
+        `${key} in ${project.file} must be a non-empty string; it is ignored and spartan's default "${SPARTAN_DEFAULTS[key]}" is read instead.`
+      )
+    }
     const dir = path.resolve(project.dir, componentsPath)
     if (isDirectory(dir)) return realpath(dir)
     warnOnce(

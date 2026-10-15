@@ -7,6 +7,20 @@ import { replaceClass } from "../grammar/classes"
 import { isMarkupLiteral, readerFor } from "../sites/readers"
 import { angularReader } from "../sites/readers/angular"
 
+// A value whose bindings a reader blanked to spaces (`masked`), written
+// out as the source spells it with those spaces in place. Null where the
+// value is not the source less its bindings, as when an entity moved it.
+function maskedSource(inner: string, value: string) {
+  if (inner.length !== value.length) return null
+  let out = ""
+  for (let i = 0; i < inner.length; i++) {
+    if (inner[i] === value[i]) out += inner[i]
+    else if (value[i] === " ") out += " "
+    else return null
+  }
+  return out
+}
+
 // Markup text is its own source: nothing is escaped, and the quotes, if
 // the node has them at all, stay where they are.
 function replaceInMarkup(
@@ -19,8 +33,31 @@ function replaceInMarkup(
   const quote = raw[0] === '"' || raw[0] === "'" ? raw[0] : ""
   const inner = quote ? raw.slice(1, -1) : raw
   if (quote && raw[raw.length - 1] !== quote) return null
-  const replaced = replaceClass(inner, token, replacement)
-  return replaced === inner ? null : `${quote}${replaced}${quote}`
+  if (!node.masked) {
+    const replaced = replaceClass(inner, token, replacement)
+    return replaced === inner ? null : `${quote}${replaced}${quote}`
+  }
+  // The class is found where the bindings are blanked, so a token inside
+  // one is never taken for it, and rewritten at the same place.
+  const masked = maskedSource(inner, node.value)
+  if (masked === null) return null
+  const replaced = replaceClass(masked, token, replacement)
+  if (replaced === masked) return null
+  let start = 0
+  while (masked[start] === replaced[start]) start++
+  // The tail shared ends where the head does, in the shorter of the two.
+  let end = 0
+  while (
+    end < Math.min(masked.length, replaced.length) - start &&
+    masked[masked.length - 1 - end] === replaced[replaced.length - 1 - end]
+  ) {
+    end++
+  }
+  const text =
+    inner.slice(0, start) +
+    replaced.slice(start, replaced.length - end) +
+    inner.slice(inner.length - end)
+  return `${quote}${text}${quote}`
 }
 
 export function replaceInLiteral(

@@ -8,6 +8,8 @@
 // A script file is otherwise JSX's, so this reader wraps the JSX one and
 // takes only the properties of a host object.
 
+import * as path from "node:path"
+
 import { warnOnce } from "../../project/warn"
 import { angularCompiler, fileOfNode } from "./angular-compiler"
 import {
@@ -29,11 +31,9 @@ function keyOf(property: any): string | null {
     : null
 }
 
-// The object in `@Component({ host: { ... } })`.
-function isHostObject(object: any) {
-  const host = object?.parent
-  if (host?.type !== "Property" || host.value !== object) return false
-  if (keyOf(host) !== "host") return false
+// The `host` option of `@Component({ host })` or `@Directive({ host })`.
+function isHostOption(host: any) {
+  if (host?.type !== "Property" || keyOf(host) !== "host") return false
   const config = host.parent
   const call = config?.parent
   return (
@@ -44,6 +44,57 @@ function isHostObject(object: any) {
     DECORATORS.has(call.callee.name) &&
     call.parent?.type === "Decorator"
   )
+}
+
+// The object in `@Component({ host: { ... } })`.
+function isHostObject(object: any) {
+  const host = object?.parent
+  return host?.value === object && isHostOption(host)
+}
+
+// A value as a warning can name it.
+function shown(node: any) {
+  if (node?.type === "Identifier") return `\`${node.name}\``
+  return "an expression"
+}
+
+// What `host` holds that is not written out may bind any class or
+// style, so the rules that read it say once for the component that they
+// do not check it there.
+function warnUnread(host: any, reason: string) {
+  const declaration = host?.parent?.parent?.parent?.parent
+  const name = declaration?.id?.name ?? "a component"
+  const file = fileOfNode(host) ?? ""
+  const relative = path.relative(process.cwd(), file)
+  const where = (relative.startsWith("..") ? file : relative).replace(
+    /\\/g,
+    "/"
+  )
+  warnOnce(
+    `angular-host:unread:${file}:${name}`,
+    `The host of ${name} in ${where} cannot be read: ${reason}. The classes and styles it binds there are not checked.`
+  )
+}
+
+// The `host` option itself: an object whose every key is written out.
+function checkHostOption(property: any) {
+  if (!isHostOption(property)) return
+  const value = property.value
+  if (value?.type !== "ObjectExpression") {
+    warnUnread(property, `host is ${shown(value)}, not an object`)
+    return
+  }
+  for (const entry of value.properties ?? []) {
+    if (entry.type === "SpreadElement") {
+      const spread = shown(entry.argument).replaceAll("`", "")
+      warnUnread(property, `it spreads \`...${spread}\``)
+      return
+    }
+    if (entry.computed) {
+      warnUnread(property, "a key is computed")
+      return
+    }
+  }
 }
 
 // What a host key sets, under the name a template attribute would have.
@@ -250,6 +301,8 @@ function hostValueOf(property: any) {
         keyString.source,
         property
       )
+    } else if (inner.startsWith("style.") && !inner.split(".")[1]) {
+      // `[style.]` names no property, and sets none.
     } else if (inner.startsWith("style.") && keyString) {
       const name = inner.slice("style.".length).split(".")[0]
       const at = keyString.source.at
@@ -269,6 +322,12 @@ function hostValueOf(property: any) {
       const ast = parsed()
       if (ast && string) value = estreeOf(ast, string.source, property)
     }
+    if (!string && !inner.startsWith("class.")) {
+      warnUnread(
+        property.parent?.parent,
+        `\`${binding.key}\` holds ${shown(property.value)}, not a string`
+      )
+    }
   }
   values.set(property, value)
   return value
@@ -283,10 +342,12 @@ export function withHostBindings(reader: TemplateReader): TemplateReader {
   return {
     ...reader,
     attributes: [...reader.attributes, "Property"],
-    attributeName: (node) =>
-      node?.type === "Property"
-        ? (hostBindingOf(node)?.name ?? "")
-        : reader.attributeName(node),
+    attributeName: (node) => {
+      if (node?.type !== "Property") return reader.attributeName(node)
+      const binding = hostBindingOf(node)
+      if (!binding) checkHostOption(node)
+      return binding?.name ?? ""
+    },
     attributeValue: (node) =>
       node?.type === "Property"
         ? hostValueOf(node)

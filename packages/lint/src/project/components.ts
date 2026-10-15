@@ -4,6 +4,7 @@
 import * as fs from "node:fs"
 import * as path from "node:path"
 
+import { isAngularFile } from "./angular-files"
 import { projectFor, resolveAlias, uiDirectory } from "./components-json"
 import { isFile, mtimeOf, realpath, TTL } from "./fs"
 import { exportsOf } from "./modules"
@@ -163,7 +164,7 @@ export function componentsFor(fromFile: string, ui: string[] = []) {
   const project = projectFor(fromFile)
   if (!project) return EMPTY
   const dirs = new Set<string>()
-  const own = uiDirectory(project)
+  const own = uiDirectory(project, isAngularFile(fromFile))
   if (own) dirs.add(own)
   for (const prefix of ui) {
     const dir = resolveAlias(project, prefix)

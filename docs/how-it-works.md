@@ -285,7 +285,8 @@ Svelte and Vue components forward `class` the same way. See
 - Readable objects spread onto elements, including nested spreads and
   computed keys.
 - `style` attributes, `<style>` elements, and SVG color attributes:
-  `fill`, `stroke`, `color`, `stopColor`, `floodColor`, and `lightingColor`.
+  `fill`, `stroke`, `color`, `stopColor`, `floodColor`, and `lightingColor`,
+  or `stop-color`, `flood-color`, and `lighting-color` as markup spells them.
 - Every string literal when `scanAllStrings` is enabled on
   `no-raw-colors` or `no-arbitrary-values`.
 

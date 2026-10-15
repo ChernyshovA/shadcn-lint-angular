@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest"
 
 import { classifierFor, groupOf } from "../src/grammar/classifier"
 import { plugin } from "../src/index"
+import { noteAngularCode } from "../src/project/angular-files"
 import { componentsFor } from "../src/project/components"
 import {
   findProject,
@@ -683,11 +684,71 @@ describe("a spartan components.json", () => {
     expect(project.spartan).toEqual({
       componentsPath: "libs/kit",
       importAlias: "@acme/kit",
+      ignored: [],
     })
     expect(project.cssFile).toBe(path.join(root, "src/styles.css"))
-    expect(uiDirectory(project)).toBe(path.join(root, "libs/kit"))
+    expect(uiDirectory(project, true)).toBe(path.join(root, "libs/kit"))
+    noteAngularCode(page(), true)
     expect(componentsFor(page()).owns(button)).toBe(true)
     expect(warnings).toEqual([])
+  })
+
+  // A barrel or a helper of an Angular app imports nothing from Angular,
+  // and is the app's as much as its components are. The rules find what
+  // a file is as they start on it.
+  test("is read for a script of an Angular project", () => {
+    config({ componentsPath: "libs/kit" })
+    const button = write("libs/kit/button/src/lib/kit-button.ts", "")
+    const barrel = write(
+      "libs/kit/button/src/index.ts",
+      `export * from "./lib/kit-button"`
+    )
+    const lint = (file: string) =>
+      new Linter({ cwd: root }).verify(
+        fs.readFileSync(file, "utf8"),
+        {
+          files: ["**/*.ts", "**/*.tsx"],
+          languageOptions: {
+            parser,
+            parserOptions: { ecmaFeatures: { jsx: true } },
+          },
+          plugins: { shadcn: plugin },
+          rules: { "shadcn/no-restyle": "error" },
+        } as any,
+        { filename: file }
+      )
+    // A dependency on Angular does not make a package's script Angular's.
+    write(
+      "package.json",
+      JSON.stringify({ dependencies: { "@angular/core": "^22.0.0" } })
+    )
+    lint(barrel)
+    expect(componentsFor(barrel).owns(button)).toBe(false)
+    write(
+      "angular.json",
+      JSON.stringify({ projects: { kit: { root: "libs/kit" } } })
+    )
+    resetFsMemo()
+    lint(barrel)
+    expect(componentsFor(barrel).owns(button)).toBe(true)
+    // A component file of another framework there reads it as upstream.
+    const react = write("libs/kit/button/src/page.tsx", `export const A = 1`)
+    lint(react)
+    expect(componentsFor(react).owns(button)).toBe(false)
+  })
+
+  // shadcn's schema requires aliases, so a React components.json without
+  // them reads the default alias, as upstream reads it.
+  test("is read as upstream reads it for a React file", () => {
+    config({ componentsPath: 1, buildable: false })
+    const button = write("libs/ui/button/src/index.ts", "")
+    const react = path.join(root, "src/app/page.tsx")
+    noteAngularCode(react, false)
+    expect(uiDirectory(projectFor(react)!)).toBeNull()
+    expect(componentsFor(react).owns(button)).toBe(false)
+    expect(warnings).toEqual([
+      expect.stringContaining('The ui alias "@/components/ui"'),
+    ])
   })
 
   test.each([
@@ -701,16 +762,17 @@ describe("a spartan components.json", () => {
       componentsPath: "libs/ui",
       importAlias:
         "importAlias" in json ? json.importAlias : "@spartan-ng/helm",
+      ignored: [],
     })
-    expect(uiDirectory(project)).toBe(path.join(root, "libs/ui"))
+    expect(uiDirectory(project, true)).toBe(path.join(root, "libs/ui"))
     expect(warnings).toEqual([])
   })
 
   test("a componentsPath that is no directory warns once, naming it", () => {
     config({ componentsPath: "libs/ui" })
     const project = projectFor(page())!
-    expect(uiDirectory(project)).toBeNull()
-    uiDirectory(project)
+    expect(uiDirectory(project, true)).toBeNull()
+    uiDirectory(project, true)
     expect(warnings).toEqual([
       `[@shadcn/lint] The componentsPath "libs/ui" in ${path.join(root, "components.json")} is not a directory, so design-system components imported from "@spartan-ng/helm" are not recognized in this project. Fix componentsPath, or set componentImports.`,
     ])
@@ -721,7 +783,9 @@ describe("a spartan components.json", () => {
     write("libs/ui/button/src/index.ts", "")
     const project = projectFor(page())!
     expect(project.spartan?.componentsPath).toBe("libs/ui")
-    expect(uiDirectory(project)).toBe(path.join(root, "libs/ui"))
+    expect(warnings).toEqual([])
+    expect(uiDirectory(project, true)).toBe(path.join(root, "libs/ui"))
+    uiDirectory(project, true)
     expect(warnings).toHaveLength(1)
     expect(warnings[0]).toContain("componentsPath in")
   })

@@ -235,6 +235,65 @@ describe.skipIf(!buildUsable)("oxlint", { timeout: RUN_TIMEOUT }, () => {
 
   // Oxlint parses no Angular template, .html or inline: a component file
   // is linted for its host bindings and class helpers only.
+  // Oxlint applies a suggestion at the range the rule gives, as ESLint
+  // does: a host binding's lands on the class where the .ts spells it,
+  // and a string whose escapes move offsets gets none.
+  test("an Angular component file: host binding suggestions rewrite the class in place", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "shadcn-lint-ox-host-"))
+    try {
+      fs.writeFileSync(path.join(dir, "package.json"), "{}")
+      const host = (classes: string[]) =>
+        [
+          `import { Component } from "@angular/core"`,
+          `@Component({`,
+          `  selector: "app-host",`,
+          `  template: "",`,
+          `  host: {`,
+          `    class: "flex ${classes[0]}",`,
+          `    "[class]": "on ? '${classes[1]}' : ''",`,
+          `    "[class.${classes[2]}]": "on",`,
+          `    "[style]": "{ margin: m }",`,
+          `    "[attr.class]": \`on\n      ? '${classes[3]}'\n      : ''\`,`,
+          `    "[ngClass]": "on ? \\"p-[13px]\\" : ''",`,
+          `  },`,
+          `})`,
+          `export class HostComponent { on = true; m = 1 }`,
+        ].join("\n")
+      const file = path.join(dir, "host.component.ts")
+      fs.writeFileSync(
+        file,
+        host(["p-[13px]", "m-[13px]", "gap-[13px]", "pt-[13px]"])
+      )
+      const config = path.join(dir, "oxlintrc.json")
+      fs.writeFileSync(
+        config,
+        JSON.stringify({
+          jsPlugins: [plugin],
+          rules: { "shadcn/no-arbitrary-values": "error" },
+        })
+      )
+      const result = spawnSync(
+        process.execPath,
+        [
+          OXLINT,
+          "--format",
+          "default",
+          "--fix-suggestions",
+          "-c",
+          config,
+          file,
+        ],
+        { cwd: dir, encoding: "utf-8", timeout: RUN_TIMEOUT }
+      )
+      if (result.error) throw result.error
+      expect(fs.readFileSync(file, "utf8")).toBe(
+        host(["p-3.25", "m-3.25", "gap-3.25", "pt-3.25"])
+      )
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   test("an Angular component file: says once that its template is not read", () => {
     const project = path.join(FIXTURES, "angular-project")
     const out = oxlint(project, "src/app/card.component.ts", {

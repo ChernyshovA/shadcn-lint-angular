@@ -6,6 +6,7 @@
 // a .tsx component's does. An input such as styleClass is judged by the
 // contract of the directive that takes it.
 
+import { propertyGroup } from "../grammar/categories"
 import { normalizeClass, OPACITY_MODIFIER } from "../grammar/classes"
 import {
   directiveOf,
@@ -35,12 +36,63 @@ import type { Judge, Subject } from "./no-restyle"
 type Contracts = ReturnType<typeof compileContracts>
 
 // What lands on the element itself: `class`, and `[class]`, `[class.x]`,
-// `[ngClass]` and `[attr.class]`, which the reader names `class`, and
+// `[ngClass]`, `[attr.class]` and `[className]`, which the reader names
+// `class` (CLASS_BINDING in angular-partial.ts says the same of a
+// directive's host), and
 // the classes NgClass and routerLinkActive add to their element. An
 // input such as styleClass, panelClass or enterActiveClass hands its
 // classes to the directive that takes it, which puts them where it
 // likes: inside its component, or on another element.
 export const ON_ELEMENT = new Set(["class", "ngClass", "routerLinkActive"])
+
+// What a class of the component's own styles may set and still be
+// layout: the properties Tailwind's layout utilities set, those of the
+// groups the grammar gives no appearance category (sr-only's padding and
+// clip-path aside), with the longhands and shorthands that set nothing
+// else. Anything else paints, or the grammar has it in an appearance
+// category, as text-overflow is typography and border-spacing spacing.
+const LAYOUT_PROPERTIES = new Set(
+  [
+    "align-content,align-items,align-self,appearance,aspect-ratio",
+    "backface-visibility,block-size,border-collapse,bottom",
+    "box-decoration-break,box-sizing,break-after,break-before,break-inside",
+    "caption-side,clear,color-scheme,column-count,column-width,columns",
+    "contain,container,container-name,container-type,content,cursor",
+    "display,field-sizing,flex,flex-basis,flex-direction,flex-flow",
+    "flex-grow,flex-shrink,flex-wrap,float,forced-color-adjust",
+    "grid-area,grid-auto-columns,grid-auto-flow,grid-auto-rows",
+    "grid-column,grid-column-end,grid-column-start,grid-row,grid-row-end",
+    "grid-row-start,grid-template-columns,grid-template-rows,height",
+    "inline-size,inset,inset-block,inset-block-end,inset-block-start",
+    "inset-inline,inset-inline-end,inset-inline-start,isolation",
+    "justify-content,justify-items,justify-self,left,margin,margin-block",
+    "margin-block-end,margin-block-start,margin-bottom,margin-inline",
+    "margin-inline-end,margin-inline-start,margin-left,margin-right",
+    "margin-top,max-block-size,max-height,max-inline-size,max-width",
+    "min-block-size,min-height,min-inline-size,min-width,object-fit",
+    "object-position,order,overflow,overflow-wrap,overflow-x,overflow-y",
+    "overscroll-behavior,overscroll-behavior-x,overscroll-behavior-y",
+    "perspective,perspective-origin,place-content,place-items,place-self",
+    "pointer-events,position,resize,right,rotate,scale,scroll-behavior",
+    "scroll-margin,scroll-margin-block,scroll-margin-block-end",
+    "scroll-margin-block-start,scroll-margin-bottom,scroll-margin-inline",
+    "scroll-margin-inline-end,scroll-margin-inline-start,scroll-margin-left",
+    "scroll-margin-right,scroll-margin-top,scroll-padding",
+    "scroll-padding-block,scroll-padding-block-end",
+    "scroll-padding-block-start,scroll-padding-bottom,scroll-padding-inline",
+    "scroll-padding-inline-end,scroll-padding-inline-start",
+    "scroll-padding-left,scroll-padding-right,scroll-padding-top",
+    "scroll-snap-align,scroll-snap-stop,scroll-snap-type,scrollbar-gutter",
+    "scrollbar-width,tab-size,table-layout,text-align,top,touch-action",
+    "transform,transform-origin,transform-style,translate,user-select",
+    "vertical-align,visibility,white-space,width,will-change,word-break",
+    "z-index,zoom",
+  ]
+    .join(",")
+    .split(",")
+)
+
+const VENDOR_PREFIX = /^-(?:webkit|moz|ms|o)-/
 
 type Named = Subject & {
   // Whether the directive styles the element it is on.
@@ -89,6 +141,25 @@ export function angularRestyle(
     const host =
       component && angularHostClassesOf(component.file, component.name)
     return !!host && !host.unread && host.has(base)
+  }
+
+  // A class the component's own styles declare is read by what their
+  // rules set, as an @utility is by its body: `.orders-card { max-width:
+  // 40rem }` is layout. Only when every rule it is in sets layout alone,
+  // not a custom property, which the component inside may read, nor what
+  // cannot be read; and not where the global styles declare it too.
+  // Null otherwise: the grammar cannot tell what it changes.
+  let own: OwnClasses | undefined
+  let global: OwnClasses | null | undefined
+  const ownGroupOf = (token: string) => {
+    own ??= angularOwnClassesOf(template, physical)
+    if (global === undefined) global = angularGlobalClassesOf(physical)
+    if (global?.has(token)) return null
+    const properties = own.propertiesOf?.(token)
+    if (!properties) return null
+    const unprefixed = properties.map((p) => p.replace(VENDOR_PREFIX, ""))
+    if (!unprefixed.every((p) => LAYOUT_PROPERTIES.has(p))) return null
+    return propertyGroup(unprefixed[0] ?? "display")
   }
 
   // An element with the contracts its names match, or null.
@@ -250,7 +321,16 @@ export function angularRestyle(
       return subject
     }
     return (token) => {
-      const refused = contracts.decideElement(matched, token, every)
+      let refused = contracts.decideElement(matched, token, every)
+      if (
+        refused &&
+        !input &&
+        refused.every(({ verdict }) => verdict.category === "unclassified")
+      ) {
+        const group = ownGroupOf(token)
+        if (group)
+          refused = contracts.decideElement(matched, token, every, group)
+      }
       // An element only directives that style nothing name wears its
       // classes as a plain one; what it hands an input is the input's.
       if (!refused || (!input && isPlain(site.element, matched))) return null
@@ -312,6 +392,7 @@ function definitionsOf(found: DirectiveRef | null) {
     )?.file ?? null
   return {
     known: !!directive,
+    compiled: !!found?.compiled,
     variants: axis("variant") ?? { file, names: null },
     sizes: axis("size") ?? { file, names: null },
   }

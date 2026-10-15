@@ -1381,18 +1381,23 @@ export function classSiteVisitors(
   }
 
   const visitors: Visitors = {}
+  const attributeVisitor = (node: any) => {
+    const name = reader.attributeName(node)
+    if (
+      (!isClassAttribute(name) || reader.notClassAttributes?.includes(name)) &&
+      !reader.classAttributes?.includes(name)
+    )
+      return
+    for (const site of attributeSites(node)) emit(site)
+    for (const string of reader.sourceStrings?.(node) ?? [])
+      reportedStrings.add(string)
+  }
   for (const type of reader.attributes) {
+    addVisitor(visitors, type, attributeVisitor)
+  }
+  for (const [type, held] of Object.entries(reader.heldAttributes ?? {})) {
     addVisitor(visitors, type, (node: any) => {
-      const name = reader.attributeName(node)
-      if (
-        (!isClassAttribute(name) ||
-          reader.notClassAttributes?.includes(name)) &&
-        !reader.classAttributes?.includes(name)
-      )
-        return
-      for (const site of attributeSites(node)) emit(site)
-      for (const string of reader.sourceStrings?.(node) ?? [])
-        reportedStrings.add(string)
+      for (const attribute of held(node)) attributeVisitor(attribute)
     })
   }
   for (const type of reader.spreads) {

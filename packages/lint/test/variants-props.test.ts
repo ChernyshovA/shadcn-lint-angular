@@ -195,21 +195,32 @@ describe("variants from props", () => {
     expect(variantNamesFor(file, "Label")).toBeNull()
   })
 
-  // A class is a scope as a function is, for an Angular directive's cva
-  // and so for a React class component's.
-  test("a cva a class component uses stands in, whatever its name", () => {
+  // A class is a scope as a function is in an Angular file, where a
+  // directive's cva is used in its body; a React class component reads as
+  // it does upstream.
+  test("a cva a class uses stands in only in an Angular file", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "shadcn-lint-variants-"))
-    const file = path.join(dir, "fancy.tsx")
+    const react = path.join(dir, "fancy.tsx")
     fs.writeFileSync(
-      file,
+      react,
       `const styles = cva("", { variants: { variant: { solid: "", ghost: "" } } })
        export class Fancy extends React.Component<{ variant?: "solid" | "ghost" }> {
          render() { return <span className={styles({ variant: this.props.variant })} /> }
-       }
-       export class Plain extends React.Component { render() { return <span /> } }`
+       }`
     )
-    expect(variantNamesFor(file, "Fancy")).toEqual(["solid", "ghost"])
-    expect(variantNamesFor(file, "Plain")).toBeNull()
+    expect(variantNamesFor(react, "Fancy")).toBeNull()
+    const angular = path.join(dir, "fancy.ts")
+    fs.writeFileSync(
+      angular,
+      `import { Directive, input } from "@angular/core"
+       const styles = cva("", { variants: { variant: { solid: "", ghost: "" } } })
+       @Directive({ selector: "[fancy]" })
+       export class Fancy { variant = input<"solid" | "ghost">(); classes = styles({ variant: this.variant() }) }
+       @Directive({ selector: "[plain]" })
+       export class Plain {}`
+    )
+    expect(variantNamesFor(angular, "Fancy")).toEqual(["solid", "ghost"])
+    expect(variantNamesFor(angular, "Plain")).toBeNull()
   })
 
   test("variantNamesFor reads an alias and a lookup object from the file", () => {

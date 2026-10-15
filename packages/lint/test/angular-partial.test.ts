@@ -295,7 +295,7 @@ describe("the forms of a partial declaration", () => {
     fs.rmSync(root, { recursive: true, force: true })
   })
 
-  it("puts a class through a static class, a class binding or one of a single class", () => {
+  it("puts a class through a static class, a binding of the class, its attribute, className or one of a single class", () => {
     const host = (written: string) => {
       library(
         `class Kit {\n  static ɵdir = ${declare("Kit", `selector: "[kit]", host: ${written}, `)};\n}\nexport { Kit };\n`
@@ -305,9 +305,11 @@ describe("the forms of a partial declaration", () => {
     expect(host(`{ classAttribute: "kit" }`)).toBe(true)
     expect(host(`{ properties: { "class": "c()" } }`)).toBe(true)
     expect(host(`{ properties: { "class.kit-on": "on()" } }`)).toBe(true)
+    expect(host(`{ properties: { "attr.class": "c()" } }`)).toBe(true)
+    expect(host(`{ properties: { "className": "c()" } }`)).toBe(true)
     expect(
       host(
-        `{ attributes: { "role": "button" }, listeners: { "click": "go()" }, properties: { "attr.class": "c()", "style.color": "c()", "classes": "c()" }, styleAttribute: "color: red" }`
+        `{ attributes: { "role": "button" }, listeners: { "click": "go()" }, properties: { "attr.title": "c()", "style.color": "c()", "classes": "c()", "classNames": "c()" }, styleAttribute: "color: red" }`
       )
     ).toBe(false)
     // What it cannot read may bind a class.

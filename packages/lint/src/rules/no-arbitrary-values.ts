@@ -21,7 +21,7 @@ import {
 import { classSiteVisitors } from "../sites/collect"
 import { compileVocabularyPolicy, configErrorVisitors } from "./contracts"
 import { classSuggestions } from "./fixes"
-import { displayPath, fileOf, listTokens, reporter } from "./messages"
+import { fileOf, listTokens, reporter, shownPath } from "./messages"
 import { policySchema, recognitionSchema } from "./policy-schema"
 import { withSettings } from "./settings"
 import {
@@ -187,9 +187,7 @@ export const noArbitraryValues = {
           if (exemption.kind === "ok") continue
           if (file === undefined) {
             const themeFile = themeFileFor(filename)
-            file = themeFile
-              ? displayPath(themeFile, context)
-              : "your theme CSS"
+            file = themeFile ? shownPath(themeFile, context) : "your theme CSS"
           }
           const group = groupOf(token)
           const category = categoryOf(group)

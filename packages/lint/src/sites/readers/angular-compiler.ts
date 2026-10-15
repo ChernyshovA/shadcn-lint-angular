@@ -10,7 +10,10 @@ const require = createRequire(import.meta.url)
 
 const NAME = "@angular-eslint/bundled-angular-compiler"
 
-const byDirectory = new Map<string, any>()
+// By directory, what was found, and when; none found is looked for again
+// after a while, as a compiler installed mid-session is there to find.
+const byDirectory = new Map<string, { compiler: any; at: number }>()
+const RETRY_AFTER = 5000
 
 function load(directory: string) {
   const from = createRequire(path.join(directory, "package.json"))
@@ -32,22 +35,15 @@ function load(directory: string) {
   return null
 }
 
-let override: any
-
-// Tests stand in a compiler, or its absence with null.
-export function setAngularCompilerForTests(compiler: any) {
-  override = compiler
-}
-
 // Null when neither the file's project nor this package has it.
 export function angularCompiler(file: string | null | undefined) {
-  if (override !== undefined) return override
   const directory = file ? path.dirname(path.resolve(file)) : process.cwd()
-  let compiler = byDirectory.get(directory)
-  if (compiler === undefined) {
-    compiler = load(directory)
-    byDirectory.set(directory, compiler)
+  const found = byDirectory.get(directory)
+  if (found && (found.compiler || Date.now() - found.at < RETRY_AFTER)) {
+    return found.compiler
   }
+  const compiler = load(directory)
+  byDirectory.set(directory, { compiler, at: Date.now() })
   return compiler
 }
 

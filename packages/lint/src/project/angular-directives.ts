@@ -32,8 +32,13 @@ import {
   type DtsClass,
   type DtsValue,
 } from "./angular-dts"
-import { compiledStyles } from "./angular-partial"
-import { templateOwners, type ComponentMeta } from "./angular-styles"
+import { CLASS_BINDING, compiledStyles } from "./angular-partial"
+import {
+  listing,
+  readText,
+  templateOwners,
+  type ComponentMeta,
+} from "./angular-styles"
 import { walk } from "./ast"
 import { isFile, memoize, mtimeOf, NODE_MODULES, realpath } from "./fs"
 import { definingExportOf } from "./modules"
@@ -85,7 +90,8 @@ type Directive = Known & {
 type ParsedModule = {
   // Local name -> where it is imported from; "*" for a namespace.
   imports: Map<string, { spec: string; name: string }>
-  // Top-level classes, and constants by their value.
+  // Top-level classes, and constants by their value, as much of each as
+  // is read: see summaryOf.
   declarations: Map<string, any>
 }
 
@@ -107,6 +113,11 @@ function moduleOf(file: string) {
   }
   parsed.set(file, { mtimeMs, module })
   return module
+}
+
+// What the cache keeps of a file's declaration, for tests.
+export function cachedDeclarationForTests(file: string, name: string) {
+  return moduleOf(file)?.declarations.get(name) ?? null
 }
 
 function nameOf(node: any): string | null {
@@ -147,16 +158,82 @@ function declarationsOf(program: any): ParsedModule {
         ? statement.declaration
         : statement
     if (node?.type === "ClassDeclaration" && node.id?.name) {
-      declarations.set(node.id.name, node)
+      declarations.set(node.id.name, classSummaryOf(node))
     } else if (node?.type === "VariableDeclaration") {
       for (const declarator of node.declarations ?? []) {
         if (declarator.id?.type === "Identifier" && declarator.init) {
-          declarations.set(declarator.id.name, declarator.init)
+          declarations.set(declarator.id.name, valueSummaryOf(declarator.init))
         }
       }
     }
   }
   return { imports, declarations }
+}
+
+// A module stays cached while the session lives, so it keeps of its tree
+// only what is read: of a class its decorators, the class it extends, of
+// each member its key, decorators and the call it is initialized with,
+// and what its body calls and binds (see stylesHost); of a constant a
+// list, a string or what a scope entry names, and of any other only its
+// kind. A tree holds no parent references, so the rest is let go.
+function classSummaryOf(node: any) {
+  return {
+    type: node.type,
+    id: node.id,
+    decorators: node.decorators,
+    superClass: node.superClass,
+    body: { body: (node.body?.body ?? []).map(memberSummaryOf) },
+    styling: stylingOf(node),
+  }
+}
+
+function memberSummaryOf(member: any) {
+  const value = member?.value
+  return {
+    type: member?.type,
+    computed: member?.computed,
+    key: member?.key,
+    decorators: member?.decorators,
+    // `input(initial, { alias })`: what fieldInputOf reads of the call.
+    value:
+      value?.type === "CallExpression"
+        ? {
+            type: value.type,
+            callee: value.callee,
+            arguments: (value.arguments ?? []).map((argument: any) =>
+              argument?.type === "ObjectExpression" ||
+              argument?.type === "Literal"
+                ? argument
+                : { type: argument?.type }
+            ),
+          }
+        : value && { type: value.type },
+  }
+}
+
+const KEPT_VALUES = new Set([
+  "ArrayExpression",
+  "Literal",
+  "TemplateLiteral",
+  "Identifier",
+])
+
+function valueSummaryOf(init: any) {
+  const value = unwrapped(init)
+  if (KEPT_VALUES.has(value?.type)) return init
+  // `forwardRef(() => X)` and `X.forRoot()` name X, as a scope entry.
+  if (value?.type === "CallExpression") {
+    const { callee } = value
+    if (nameOf(callee) === "forwardRef") return value
+    if (callee?.type === "MemberExpression") {
+      return {
+        type: value.type,
+        callee: { type: callee.type, object: callee.object },
+        arguments: [],
+      }
+    }
+  }
+  return { type: value?.type }
 }
 
 // A value past `as const`, `satisfies` and parentheses.
@@ -238,11 +315,13 @@ function directiveOptions(node: any) {
 }
 
 // A string written out, or built of the constants the file declares:
-// "kit-local", SELECTOR, `${PREFIX}-tpl`. Null for any other.
+// "kit-local", SELECTOR, `${PREFIX}-tpl`. Null for any other. Each
+// constant is read once, and one built of itself is not read.
 function constantString(
   node: any,
   module: ParsedModule,
-  depth = 0
+  depth = 0,
+  read = new Map<string, string | null>()
 ): string | null {
   const value = unwrapped(node)
   if (value?.type === "Literal") {
@@ -250,8 +329,15 @@ function constantString(
   }
   if (depth > MAX_DEPTH) return null
   if (value?.type === "Identifier") {
+    if (read.has(value.name)) return read.get(value.name)!
+    // Until it is read, a constant that names itself reads as nothing.
+    read.set(value.name, null)
     const declared = module.declarations.get(value.name)
-    return declared ? constantString(declared, module, depth + 1) : null
+    const string = declared
+      ? constantString(declared, module, depth + 1, read)
+      : null
+    read.set(value.name, string)
+    return string
   }
   if (value?.type !== "TemplateLiteral") return null
   let out = ""
@@ -259,7 +345,7 @@ function constantString(
     if (typeof quasi.value?.cooked !== "string") return null
     out += quasi.value.cooked
     if (i === value.expressions.length) break
-    const part = constantString(value.expressions[i], module, depth + 1)
+    const part = constantString(value.expressions[i], module, depth + 1, read)
     if (part === null) return null
     out += part
   }
@@ -283,52 +369,46 @@ type Reading = {
   helpers: ReadonlySet<string>
   // Whether every entry of the scope was followed to what it is.
   complete: boolean
+  // The lists of entries read, and those being read: see addFound.
+  lists: Lists
 }
 
-const CLASS_HOST_KEY = /^(?:class|\[class(?:\.[^\]]+)?\]|\[ngClass\])$/
+// The lists a walk has opened, and those still open in it. One reached
+// again, as two constants that hold a third reach it, adds nothing
+// more; one reached from inside itself holds itself, which no build
+// evaluates: `const A = [B]; const B = [A]` throws before it is read.
+type Lists = { opened: Set<unknown>; open: Set<unknown> }
+
+const noLists = (): Lists => ({ opened: new Set(), open: new Set() })
+
+// Opens a list for a walk: "new" to read it, "again" for one read
+// already, "loop" for one the walk is inside.
+function openList(lists: Lists, list: unknown) {
+  if (lists.opened.has(list)) return lists.open.has(list) ? "loop" : "again"
+  lists.opened.add(list)
+  lists.open.add(list)
+  return "new"
+}
 
 // A directive that styles its element: one that takes the element's own
 // class into its classes, as spartan's classes() does through
 // inject(new HostAttributeToken("class")), builds classes with a helper
 // mergeFunctions names, or binds the class itself in `host` or with
-// @HostBinding. A trigger beside it does none of these. Null when it
+// @HostBinding, as `class.x`, `attr.class` or `className` too. A trigger
+// beside it does none of these. Null when it
 // does none this can read, and names or binds what this cannot read:
 // `host: HOST`, `@HostBinding(CLASS)`. Calls count in its class body
 // alone: spartan's HlmTooltip calls hlm in its providers and at module
 // level for the tooltip it opens, not for its element.
 function stylesHost(node: any, helpers: ReadonlySet<string>) {
-  let styles = false
-  let unread = false
-  // A name a class, a token or a binding is given as a string.
-  const named = (argument: any, test: (name: string) => boolean) => {
-    const name = stringIn(argument)
-    if (name === null && argument) unread = true
-    return name !== null && test(name)
-  }
-  walk(node.body, (child) => {
-    if (styles) return
-    if (child.type === "CallExpression") {
-      const callee = dottedName(child.callee)
-      styles = callee === "classes" || (!!callee && helpers.has(callee))
-    } else if (
-      child.type === "NewExpression" &&
-      nameOf(child.callee) === "HostAttributeToken"
-    ) {
-      styles = named(child.arguments?.[0], (name) => name === "class")
-    } else if (child.type === "Decorator") {
-      const callee = child.expression?.callee
-      const name =
-        callee?.type === "MemberExpression"
-          ? nameOf(callee.property)
-          : nameOf(callee)
-      if (name === "HostBinding" || name === "Attribute") {
-        styles = named(child.expression.arguments?.[0], (bound) =>
-          /^class(?:\.|$)/.test(bound)
-        )
-      }
-    }
-  })
-  if (styles) return true
+  const { calls, tokens, bindings } = node.styling as Styling
+  if ([...calls].some((callee) => callee === "classes" || helpers.has(callee)))
+    return true
+  if (tokens.includes("class")) return true
+  if (bindings.some((bound) => bound !== null && CLASS_BINDING.test(bound)))
+    return true
+  // A name a token or a binding is given as is not a string.
+  const unread = tokens.includes(null) || bindings.includes(null)
   const decorator = decoratorOf(node, DIRECTIVE)
   // A spread among its options can carry `host`.
   if (decorator && !decorator.whole) return null
@@ -336,11 +416,57 @@ function stylesHost(node: any, helpers: ReadonlySet<string>) {
   if (host) {
     if (!whole(host)) return null
     const keys = host.properties.map((property: any) => nameOf(property.key))
-    if (keys.some((key: string | null) => CLASS_HOST_KEY.test(key ?? ""))) {
-      return true
-    }
+    if (keys.some((key: string | null) => isClassHostKey(key))) return true
   }
   return unread ? null : false
+}
+
+type Styling = {
+  // What the class body calls, by dotted name.
+  calls: Set<string>
+  // The names `new HostAttributeToken(…)` is given, null for one that is
+  // not a string.
+  tokens: (string | null)[]
+  // The same of @HostBinding(…) and @Attribute(…).
+  bindings: (string | null)[]
+}
+
+// What stylesHost reads of a class body, read as the file is parsed.
+function stylingOf(node: any): Styling {
+  const styling: Styling = { calls: new Set(), tokens: [], bindings: [] }
+  const name = (argument: any, into: (string | null)[]) => {
+    if (argument) into.push(stringIn(argument))
+  }
+  walk(node.body, (child) => {
+    if (child.type === "CallExpression") {
+      const callee = dottedName(child.callee)
+      if (callee) styling.calls.add(callee)
+    } else if (
+      child.type === "NewExpression" &&
+      nameOf(child.callee) === "HostAttributeToken"
+    ) {
+      name(child.arguments?.[0], styling.tokens)
+    } else if (child.type === "Decorator") {
+      const callee = child.expression?.callee
+      const decorator =
+        callee?.type === "MemberExpression"
+          ? nameOf(callee.property)
+          : nameOf(callee)
+      if (decorator === "HostBinding" || decorator === "Attribute") {
+        name(child.expression.arguments?.[0], styling.bindings)
+      }
+    }
+  })
+  return styling
+}
+
+// `class`, `[class]`, `[class.active]`, `[attr.class]`, `[className]`,
+// `[ngClass]` in `host`.
+function isClassHostKey(key: string | null) {
+  if (key === "class" || key === "[ngClass]") return true
+  return !!key?.startsWith("[") && key.endsWith("]")
+    ? CLASS_BINDING.test(key.slice(1, -1))
+    : false
 }
 
 // Three-valued or: true when one is, unknown when none is and one is
@@ -416,36 +542,41 @@ type Entry = { file: string; node: any }
 
 // The entries of a list a decorator writes, `inputs` or hostDirectives,
 // followed through the constants and spreads it is built of: `[A, ...B]`,
-// `C`. Null for a list built some other way.
-function entriesOf(
-  file: string,
-  node: any,
-  deps: Set<string>,
-  depth = 0
-): Entry[] | null {
-  if (depth > MAX_DEPTH) return null
-  const value = unwrapped(node?.type === "SpreadElement" ? node.argument : node)
-  let elements = elementsOf(value)
-  let at = file
-  if (!elements && value?.type === "Identifier") {
-    const found = lookup(file, value.name, deps)
-    if (found?.kind === "array") {
-      elements = found.elements
-      at = found.file
-    }
-  }
-  if (!elements) return null
+// `C`, each list once and each entry once. Null for a list built some
+// other way, or one that spreads itself.
+function entriesOf(file: string, node: any, deps: Set<string>): Entry[] | null {
   const out: Entry[] = []
-  for (const element of elements) {
-    if (element?.type !== "SpreadElement") {
-      out.push({ file: at, node: element })
-      continue
+  const entered = new Set<unknown>()
+  const lists = noLists()
+  const add = (file: string, node: any, depth: number): boolean => {
+    if (depth > MAX_DEPTH) return false
+    const value = unwrapped(
+      node?.type === "SpreadElement" ? node.argument : node
+    )
+    let elements = elementsOf(value)
+    let at = file
+    if (!elements && value?.type === "Identifier") {
+      const found = lookup(file, value.name, deps)
+      if (found?.kind === "array") {
+        elements = found.elements
+        at = found.file
+      }
     }
-    const spread = entriesOf(at, element, deps, depth + 1)
-    if (!spread) return null
-    out.push(...spread)
+    if (!elements) return false
+    const opened = openList(lists, elements)
+    if (opened !== "new") return opened === "again"
+    for (const element of elements) {
+      if (element?.type === "SpreadElement") {
+        if (!add(at, element, depth + 1)) return false
+      } else if (!entered.has(element)) {
+        entered.add(element)
+        out.push({ file: at, node: element })
+      }
+    }
+    lists.open.delete(elements)
+    return true
   }
-  return out
+  return add(file, node, 0) ? out : null
 }
 
 // `X.forRoot()` and the like: a call on what an entry names, which
@@ -574,7 +705,8 @@ type Inputs = { names: Set<string>; complete: boolean }
 function sourceInputs(
   found: Extract<Found, { kind: "source" }>,
   deps: Set<string>,
-  depth: number
+  depth: number,
+  chain = new Set<string>()
 ): Inputs {
   const names = new Set<string>()
   const decorator = decoratorOf(found.node, DIRECTIVE)
@@ -617,7 +749,12 @@ function sourceInputs(
   if (base && complete) {
     const inherited =
       base.type === "Identifier"
-        ? classInputs(lookup(found.file, base.name, deps), deps, depth + 1)
+        ? classInputs(
+            lookup(found.file, base.name, deps),
+            deps,
+            depth + 1,
+            chain
+          )
         : null
     if (inherited) for (const name of inherited.names) names.add(name)
     complete = !!inherited?.complete
@@ -631,27 +768,40 @@ function dtsInputs(
   file: string,
   cls: DtsClass,
   deps: Set<string>,
-  depth: number
+  depth: number,
+  chain = new Set<string>()
 ): Inputs {
   const names = new Set(cls.directive?.inputs ?? [])
   let complete = depth <= MAX_DEPTH && cls.base !== "dynamic"
   if (cls.base && cls.base !== "dynamic" && complete) {
-    const inherited = classInputs(dtsRef(file, cls.base, deps), deps, depth + 1)
+    const inherited = classInputs(
+      dtsRef(file, cls.base, deps),
+      deps,
+      depth + 1,
+      chain
+    )
     if (inherited) for (const name of inherited.names) names.add(name)
     complete = !!inherited?.complete
   }
   return { names, complete }
 }
 
+// The inputs of the class a class extends, and of those it extends in
+// turn, each once: a chain that loops back is no class a build compiles,
+// and what it takes is not known.
 function classInputs(
   found: Found | null,
   deps: Set<string>,
-  depth: number
+  depth: number,
+  chain: Set<string>
 ): Inputs | null {
-  if (found?.kind === "source") return sourceInputs(found, deps, depth)
-  if (found?.kind === "class")
-    return dtsInputs(found.file, found.cls, deps, depth)
-  return null
+  if (found?.kind !== "source" && found?.kind !== "class") return null
+  const key = `${found.file}\u0000${found.name}`
+  if (chain.has(key)) return null
+  chain.add(key)
+  return found.kind === "source"
+    ? sourceInputs(found, deps, depth, chain)
+    : dtsInputs(found.file, found.cls, deps, depth, chain)
 }
 
 // The directives a class's hostDirectives apply to its element too:
@@ -696,24 +846,81 @@ function compiledStylesOf(
   return compiledStyles(owner, found.name, cls.directive.selector, deps)
 }
 
-// Whether a directive styles its element, itself or through the
-// directives it hosts and they host in turn. Unknown when one of them
-// cannot be read.
+// Whether a library's class a directive extends styles the element: as
+// its declaration says, or, for a class Angular does not declare, a
+// helper or an @Injectable such as NgRx's ComponentStore, as the class it
+// extends does. A host compiles into a declaration, and Angular's
+// inheritance walks past the classes without one; a chain that loops
+// back adds nothing more. Unknown for a declaration this cannot read, or
+// a class it cannot follow.
+function libraryBaseStyles(
+  found: Exclude<Found, { kind: "source" }>,
+  deps: Set<string>
+): boolean | null {
+  const seen = new Set<string>()
+  let at: Found | null = found
+  for (let depth = 0; at?.kind === "class"; depth++) {
+    const { cls } = at
+    if (cls.directive) return compiledStylesOf(at, deps)
+    if (cls.declared || cls.base === "dynamic" || depth >= MAX_DEPTH) {
+      return null
+    }
+    const key = `${at.file}\u0000${at.name}`
+    if (!cls.base || seen.has(key)) return false
+    seen.add(key)
+    at = dtsRef(at.file, cls.base, deps, at.owner)
+  }
+  return null
+}
+
+// Whether a directive styles its element, itself, through the classes
+// it extends, whose host bindings, host directives and constructors are
+// its own too, or through the directives it hosts and they host in turn.
+// Unknown when one of them cannot be read: a mixin, `extends Base(…)`.
+// Each is read once, however many paths reach it: host directives that
+// meet again, or loop back, are no more to read.
 function stylesOf(
   found: Extract<Found, { kind: "source" }>,
   deps: Set<string>,
-  helpers: ReadonlySet<string>,
-  depth = 0
+  helpers: ReadonlySet<string>
 ): boolean | null {
-  const own = stylesHost(found.node, helpers)
-  if (own || depth >= MAX_DEPTH) return own || null
-  const { hosts, compiled, read } = hostsOf(found.file, found.node, deps)
-  return either([
-    own,
-    read ? false : null,
-    ...hosts.map((host) => stylesOf(host, deps, helpers, depth + 1)),
-    ...compiled.map((host) => compiledStylesOf(host, deps)),
-  ])
+  const values: (boolean | null)[] = []
+  const seen = new Set<string>()
+  let level = [found]
+  for (let depth = 0; level.length; depth++) {
+    const next: typeof level = []
+    for (const directive of level) {
+      const key = `${directive.file}\u0000${directive.name}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      const own = stylesHost(directive.node, helpers)
+      if (own) return true
+      if (depth >= MAX_DEPTH) {
+        values.push(null)
+        continue
+      }
+      values.push(own)
+      const { hosts, compiled, read } = hostsOf(
+        directive.file,
+        directive.node,
+        deps
+      )
+      if (!read) values.push(null)
+      for (const host of compiled) values.push(compiledStylesOf(host, deps))
+      next.push(...hosts)
+      const base = directive.node.superClass
+      if (base) {
+        const found =
+          base.type === "Identifier"
+            ? lookup(directive.file, base.name, deps)
+            : null
+        if (found?.kind === "source") next.push(found)
+        else values.push(found ? libraryBaseStyles(found, deps) : null)
+      }
+    }
+    level = next
+  }
+  return either(values)
 }
 
 function directivesDeclaredIn(module: ParsedModule) {
@@ -753,9 +960,10 @@ function directiveIn(
 ) {
   const key = `angular:directive:${found.file}\u0000${found.name}`
   if (found.kind === "class") {
-    return derived(key, (deps): Directive | null => {
+    return derived(key, (deps): Directive | null | undefined => {
       const { directive } = found.cls
-      if (!directive?.selector) return null
+      if (directive?.selector === undefined) return directive ? undefined : null
+      if (!directive.selector) return null
       deps.add(found.file)
       const inputs = dtsInputs(found.file, found.cls, deps, 0)
       return {
@@ -824,6 +1032,7 @@ function exportsOfModule(
         deps,
         helpers,
         complete: true,
+        lists: noLists(),
       }
       deps.add(found.file)
       if (found.kind === "class") {
@@ -869,18 +1078,23 @@ function addFound(found: Found | null, reading: Reading, depth: number) {
     reading.complete = false
     return
   }
-  if (found.kind === "array") {
-    for (const element of found.elements)
-      addEntry(found.file, element, reading, depth + 1)
-    return
-  }
-  if (found.kind === "tuple") {
-    for (const ref of found.refs)
-      addFound(
-        dtsRef(found.file, ref, reading.deps, found.owner),
-        reading,
-        depth + 1
-      )
+  if (found.kind === "array" || found.kind === "tuple") {
+    const list = found.kind === "array" ? found.elements : found.refs
+    const opened = openList(reading.lists, list)
+    if (opened === "loop") reading.complete = false
+    if (opened !== "new") return
+    if (found.kind === "array") {
+      for (const element of found.elements)
+        addEntry(found.file, element, reading, depth + 1)
+    } else {
+      for (const ref of found.refs)
+        addFound(
+          dtsRef(found.file, ref, reading.deps, found.owner),
+          reading,
+          depth + 1
+        )
+    }
+    reading.lists.open.delete(list)
     return
   }
   const decorator =
@@ -932,30 +1146,11 @@ function isModule(found: Found | null) {
   return found?.kind === "class" && !!found.cls.module
 }
 
-function readText(file: string) {
-  return memoize(`angular:read:${file}:${mtimeOf(file)}`, () => {
-    try {
-      return fs.readFileSync(file, "utf8")
-    } catch {
-      return null
-    }
-  })
-}
-
-function listing(dir: string): string[] {
-  try {
-    return memoize(`angular:dir:${dir}:${mtimeOf(dir)}`, () =>
-      fs.readdirSync(dir)
-    )
-  } catch {
-    return []
-  }
-}
-
 const NOT_SOURCE = /\.(?:d|spec|test)\.[cm]?ts$/
 const PROJECT_ROOT = ["package.json", "project.json", "angular.json"]
 
-// Whether a module's `declarations` name the class `name` of `file`.
+// Whether a module's `declarations` name the class `name` of `file`,
+// through the constants they are written as, each read once.
 function declares(
   moduleFile: string,
   module: ParsedModule,
@@ -963,9 +1158,11 @@ function declares(
   file: string,
   name: string,
   deps: Set<string>,
-  depth = 0
+  depth = 0,
+  lists = new Set<unknown>()
 ): boolean {
-  if (depth > MAX_DEPTH) return false
+  if (depth > MAX_DEPTH || lists.has(list)) return false
+  lists.add(list)
   for (const element of listed(list)) {
     const local = referenceIn(element)
     if (!local) continue
@@ -974,7 +1171,16 @@ function declares(
       if (declared.type === "ClassDeclaration") {
         if (realpath(moduleFile) === file && local === name) return true
       } else if (
-        declares(moduleFile, module, declared, file, name, deps, depth + 1)
+        declares(
+          moduleFile,
+          module,
+          declared,
+          file,
+          name,
+          deps,
+          depth + 1,
+          lists
+        )
       ) {
         return true
       }
@@ -1062,6 +1268,7 @@ function scopeOf(
         deps: new Set([file]),
         helpers,
         complete: true,
+        lists: noLists(),
       }
       // A spread among the component's options can carry its imports.
       if (meta.spreads) reading.complete = false

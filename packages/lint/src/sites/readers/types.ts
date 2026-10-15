@@ -26,6 +26,10 @@ export type ExtraSite = {
 
 export type TemplateReader = {
   attributes: string[]
+  // Nodes that hold attributes the parser hands over as no nodes of
+  // their own, by node type: Angular's ICU, whose cases' elements only
+  // its i18n message keeps. Each is read as one of `attributes`.
+  heldAttributes?: Record<string, (node: any) => any[]>
   // Attributes that hold classes under a name of their own, past the
   // class-like names every reader shares.
   classAttributes?: string[]

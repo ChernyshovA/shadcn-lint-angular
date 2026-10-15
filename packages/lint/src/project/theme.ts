@@ -10,8 +10,14 @@ import { normalizeClass, OPACITY_MODIFIER } from "../grammar/classes"
 import { parseColor, type Lab } from "../grammar/colors"
 import { lengthInPx } from "../grammar/lengths"
 import { FONT_SIZES, RADII } from "../grammar/tailwind-theme"
+import {
+  angularEntryFor,
+  angularEntryUnread,
+  checkAngularTheme,
+  holdsTheme,
+} from "./angular-theme"
 import { projectFor } from "./components-json"
-import { isFile, mtimeOf, TTL } from "./fs"
+import { isDirectory, isFile, mtimeOf, TTL } from "./fs"
 import { packageRoot, resolveFile } from "./resolve"
 import { warnOnce } from "./warn"
 
@@ -302,6 +308,12 @@ export function parseClassSelectors(css: string) {
 const resolveStylesheetImport = (spec: string, dir: string, root: string) =>
   resolveFile(spec, dir, root, [".css"], { stylesheet: true })
 
+// Whether an @import from a stylesheet in `dir` loads a stylesheet, as
+// the theme reads it.
+export function resolvesAsStylesheet(spec: string, dir: string) {
+  return resolveStylesheetImport(spec, dir, packageRoot(dir) ?? dir) !== null
+}
+
 function isPackageFile(file: string) {
   return file.includes(`${path.sep}node_modules${path.sep}`)
 }
@@ -437,6 +449,17 @@ function themeImportsOf(root: string | undefined) {
   return (root && themeImports.get(root)) || NO_IMPORTS
 }
 
+// What a stylesheet read as a project's entry gives: whether it imports
+// Tailwind, how many color tokens it declares, and the files it reads.
+export function themeEntryRead(cssFile: string, root: string) {
+  const read = themeAt(cssFile, themeImportsOf(root))
+  return {
+    tailwind: read.tailwind,
+    tokens: read.tokens.size,
+    files: read.files,
+  }
+}
+
 // The theme a linted file reads, with its project's themeImports.
 function themeOf(fromFile: string, cssFile: string) {
   if (!themeImports.size) return themeAt(cssFile)
@@ -565,6 +588,20 @@ function relativeTo(root: string, file: string) {
 export function themeFileFor(fromFile: string) {
   const project = projectFor(fromFile)
   if (!project) return null
+  const file = chosenThemeFile(fromFile, project)
+  checkAngularTheme(
+    fromFile,
+    project.root,
+    file,
+    entryPoints.has(project.root) || project.cssFile !== null
+  )
+  return file
+}
+
+function chosenThemeFile(
+  fromFile: string,
+  project: NonNullable<ReturnType<typeof projectFor>>
+) {
   const entry = entryPoints.get(project.root)
   if (entry) {
     if (isFile(entry.file)) return entry.file
@@ -573,7 +610,7 @@ export function themeFileFor(fromFile: string) {
     const fallback = configured ?? discoverThemeFile(project.root)
     warnOnce(
       `theme:missing-entry:${entry.file}`,
-      `settings.shadcn.entryPoint is ${entry.written}, which does not exist. ${
+      `settings.shadcn.entryPoint is ${entry.written}, which ${isDirectory(entry.file) ? "is a directory, not a stylesheet" : "does not exist"}. ${
         configured
           ? `Using tailwind.css from components.json, ${relativeTo(project.root, configured)}, until the path is fixed.`
           : fallback
@@ -596,7 +633,16 @@ export function themeFileFor(fromFile: string) {
     )
     return discovered
   }
-  return discoverThemeFile(project.root)
+  // An Angular app's global stylesheets name its entry. Those of the
+  // other projects in its workspace, when its own names none, only when
+  // the stylesheet found under it holds no theme.
+  const angular = angularEntryFor(fromFile, project.root)
+  if (angular && !angular.shared) return angular.file
+  const discovered = discoverThemeFile(project.root)
+  if (!angular || (discovered && holdsTheme(discovered, project.root))) {
+    return discovered
+  }
+  return angular.file
 }
 
 // The stylesheet whose Tailwind answers which classes exist. A
@@ -628,7 +674,8 @@ export function tailwindEntryFor(fromFile: string) {
   return discovered
 }
 
-const SASS_TAILWIND = /@(?:use|import|forward)\s+["']tailwindcss["']/
+const SASS_TAILWIND =
+  /@(?:use|import|forward)\s+["']tailwindcss(?:\/[^"']*)?["']/
 
 // A Sass file importing Tailwind, the way an Angular app's styles.scss
 // often does. Discovery reads CSS only.
@@ -724,10 +771,13 @@ function isTailwind3(root: string) {
 // fall back to the bundled grammar and know no theme. Quietly, that reads
 // as a project that passed, so it is said once, for the first such
 // package of a workspace: in a monorepo every package without a
-// stylesheet of its own would say it again.
+// stylesheet of its own would say it again. Only for Angular code: a
+// React, Vue or Svelte file stays as quiet as upstream.
 export function warnNoTailwindEntry(fromFile: string) {
   const project = projectFor(fromFile)
   if (!project || project.cssFile || entryPoints.has(project.root)) return
+  // The global stylesheet that imports Tailwind is said on its own.
+  if (angularEntryUnread(fromFile, project.root)) return
   let message = entryless.get(project.root)
   if (message === undefined) {
     message = noEntryMessage(project.root)
@@ -745,7 +795,7 @@ function noEntryMessage(root: string) {
   const fallback =
     "so no-unknown-classes reads classes with the grammar bundled with @shadcn/lint, and the project's theme is not read"
   return sass
-    ? `${relativeTo(root, sass)} imports Tailwind, but a Sass file is not read as the Tailwind entry and no CSS file under ${where} imports it, ${fallback}. Tailwind v4 is not meant to be used with Sass: write a CSS file that imports Tailwind, the theme and the same plugins, and set settings.shadcn.entryPoint to it.`
+    ? `${relativeTo(root, sass)} imports Tailwind, but no CSS file under ${where} does, and a Sass file is read as the Tailwind entry only among the global styles of angular.json or project.json, ${fallback}. Set settings.shadcn.entryPoint to a stylesheet written as CSS that imports Tailwind with the theme.`
     : `No stylesheet importing Tailwind was found under ${where}, ${fallback}. Set settings.shadcn.entryPoint to the stylesheet that imports Tailwind.`
 }
 

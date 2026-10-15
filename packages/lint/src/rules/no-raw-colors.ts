@@ -27,7 +27,7 @@ import { readerFor, staticStringOf, type Visitors } from "../sites/readers"
 import { unknownClasses } from "../tailwind/client"
 import { compileVocabularyPolicy, configErrorVisitors } from "./contracts"
 import { classSuggestions } from "./fixes"
-import { displayPath, fileOf, listTokens, reporter } from "./messages"
+import { fileOf, listTokens, reporter, shownPath } from "./messages"
 import { policySchema, recognitionSchema } from "./policy-schema"
 import { withSettings } from "./settings"
 import { didYouMean, nearestColorTokens, paletteColor, roleOf } from "./suggest"
@@ -214,9 +214,7 @@ export const noRawColors = {
     function readTheme() {
       const declared = colorTokensFor(filename)
       const themeFile = themeFileFor(filename)
-      const file = themeFile
-        ? displayPath(themeFile, context)
-        : "your theme CSS"
+      const file = themeFile ? shownPath(themeFile, context) : "your theme CSS"
       return {
         declared,
         scoped: scopedColorTokensFor(filename),
@@ -412,6 +410,13 @@ export const noRawColors = {
       merged[type] = (node: any) => {
         classAttribute?.(node)
         colorAttribute(node)
+      }
+    }
+    for (const [type, held] of Object.entries(reader.heldAttributes ?? {})) {
+      const classAttributes = visitors[type]
+      merged[type] = (node: any) => {
+        classAttributes?.(node)
+        for (const attribute of held(node)) colorAttribute(attribute)
       }
     }
     return merged

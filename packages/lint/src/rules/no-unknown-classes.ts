@@ -39,7 +39,7 @@ import { unknownClasses } from "../tailwind/client"
 import { ON_ELEMENT } from "./angular-restyle"
 import { compileVocabularyPolicy, configErrorVisitors } from "./contracts"
 import { classSuggestions } from "./fixes"
-import { displayPath, fileOf, reporter } from "./messages"
+import { fileOf, reporter, shownPath } from "./messages"
 import { colorValueOf } from "./no-raw-colors"
 import { policySchema, recognitionSchema } from "./policy-schema"
 import { withSettings } from "./settings"
@@ -52,7 +52,7 @@ function warnUnread(context: any, own: OwnClasses) {
   if (unread?.file) {
     warnOnce(
       `angular-styles:${unread.file}:${unread.component}`,
-      `The styles of ${unread.component} in ${displayPath(unread.file, context)} cannot be read: ${unread.reason}${whereOf(unread.where, context)}. shadcn/no-unknown-classes is skipped in its template and in the classes of its element in others, since any class there may be one they declare.`
+      `The styles of ${unread.component} in ${shownPath(unread.file, context)} cannot be read: ${unread.reason}${whereOf(unread.where, context)}. shadcn/no-unknown-classes is skipped in its template and in the classes of its element in others, since any class there may be one they declare.`
     )
   }
   return own
@@ -78,14 +78,14 @@ function angularGlobalClasses(context: any, filename: string) {
   if (unread?.file) {
     warnOnce(
       `angular-global-styles:${unread.file}`,
-      `The global styles ${displayPath(unread.file, context)} names cannot be read: ${unread.reason}${whereOf(unread.where, context)}. shadcn/no-unknown-classes is skipped in this project, since any class may be one they declare.`
+      `The global styles ${shownPath(unread.file, context)} names cannot be read: ${unread.reason}${whereOf(unread.where, context)}. shadcn/no-unknown-classes is skipped in this project, since any class may be one they declare.`
     )
   }
   return global
 }
 
 const whereOf = (where: string | null, context: any) =>
-  where ? ` in ${displayPath(where, context)}` : ""
+  where ? ` in ${shownPath(where, context)}` : ""
 
 const MESSAGES = {
   unknownClass:
@@ -99,6 +99,10 @@ const MESSAGES = {
     '"{{className}}" is not a class this project\'s Tailwind knows, so no CSS is generated for it. Fix the spelling, or declare it with @utility in {{file}}. If the stylesheet of a component that renders this host styles it, add it to allow.',
   unknownHostClassSuggest:
     '"{{className}}" is not a class this project\'s Tailwind knows, so no CSS is generated for it. Did you mean "{{suggestion}}"? If the stylesheet of a component that renders this host styles it, add it to allow.',
+  // A slip from a class the component's own styles or the global ones
+  // declare, in an Angular template.
+  unknownCssClassSuggest:
+    '"{{className}}" is not a class this project\'s Tailwind knows or its CSS declares, so no CSS is generated for it. Did you mean "{{suggestion}}", which its CSS declares?',
   unknownVariant:
     '"{{className}}" uses a variant this project\'s Tailwind does not know, so no CSS is generated for it. Use an existing variant, or declare it with @custom-variant in {{file}}.',
   useSuggestion: 'Replace with "{{suggestion}}".',
@@ -153,11 +157,11 @@ export const noUnknownClasses = {
         : new Set<string>()
     const globalClasses = angularGlobalClasses(context, filename)
     const themeFile = themeFileFor(filename)
-    const file = themeFile ? displayPath(themeFile, context) : "your theme CSS"
+    const file = themeFile ? shownPath(themeFile, context) : "your theme CSS"
     // A theme file that does not import Tailwind knows no base utilities,
     // so the grammar answers instead of a half-built design system.
     const entry = tailwindEntryFor(filename)
-    if (!entry) warnNoTailwindEntry(filename)
+    if (!entry && isAngularCode(context)) warnNoTailwindEntry(filename)
     const utilityPrefixes = utilityPrefixesOf(known.utilities)
     // Under prefix(tw), no-raw-colors leaves an unprefixed text-muted to
     // this rule: it is no more a Tailwind class than flex is.
@@ -226,6 +230,23 @@ export const noUnknownClasses = {
       return utilityPrefixes.some((prefix) => bare.startsWith(prefix))
     }
 
+    // In an Angular template, a class one slip from one the component's
+    // styles or the global ones declare, when Tailwind offers none: one
+    // the project's own stylesheets write, not a library's, whose
+    // hundreds of icon names are a slip from many a word.
+    type Declares = {
+      has: (name: string) => boolean
+      names?: OwnClasses["names"]
+    }
+    const cssSuggestion = (token: string, own: Declares) => {
+      if (!angular || normalizeClass(token) !== token) return null
+      const names = [
+        ...(own.names?.() ?? []),
+        ...(globalClasses?.names?.() ?? []),
+      ]
+      return names.length ? didYouMean(token, names, 1) : null
+    }
+
     const report = (
       node: any,
       token: string,
@@ -233,15 +254,20 @@ export const noUnknownClasses = {
       words: string | null,
       component: string,
       host: boolean,
-      variantOnly = false
+      variantOnly = false,
+      own: Declares = ownClasses
     ) => {
+      const css = suggestion || variantOnly ? null : cssSuggestion(token, own)
+      if (css) suggestion = css
       emit(
         {
           node,
           messageId: suggestion
             ? host
               ? "unknownHostClassSuggest"
-              : "unknownClassSuggest"
+              : css
+                ? "unknownCssClassSuggest"
+                : "unknownClassSuggest"
             : variantOnly
               ? "unknownVariant"
               : host
@@ -316,7 +342,8 @@ export const noUnknownClasses = {
               wordsFor.get(token) ?? null,
               site.component ?? "",
               host,
-              baseKnown && token.includes(":")
+              baseKnown && token.includes(":"),
+              own
             )
           }
           continue
@@ -329,7 +356,9 @@ export const noUnknownClasses = {
               null,
               wordsFor.get(token) ?? null,
               site.component ?? "",
-              host
+              host,
+              false,
+              own
             )
         }
       }

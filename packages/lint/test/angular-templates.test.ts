@@ -1,21 +1,28 @@
 import * as fs from "node:fs"
+import * as os from "node:os"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 import templatePlugin from "@angular-eslint/eslint-plugin-template"
 import * as ngParser from "@angular-eslint/template-parser"
 import tsParser from "@typescript-eslint/parser"
 import { Linter } from "eslint"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { plugin } from "../src/plugin"
 import { ownClassesOfCss } from "../src/project/angular-styles"
+import { resetFsMemo } from "../src/project/fs"
 import { useParser } from "../src/project/parser"
 import { resetWarnings, setWarningSink } from "../src/project/warn"
+import { replaceInLiteral } from "../src/rules/fixes"
 import { angularReader } from "../src/sites/readers/angular"
-import {
-  angularCompiler,
-  setAngularCompilerForTests,
-} from "../src/sites/readers/angular-compiler"
+import { angularCompiler } from "../src/sites/readers/angular-compiler"
+import { setAngularCompilerForTests } from "./compiler-stub"
+import { lintSfc } from "./sfc-helpers"
+
+// vi.mock runs before the imports above, so it imports the stub itself.
+vi.mock("../src/sites/readers/angular-compiler", async (importOriginal) =>
+  (await import("./compiler-stub")).mockAngularCompiler(importOriginal as any)
+)
 
 const PROJECT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -323,6 +330,13 @@ describe("Angular templates", () => {
     )
   })
 
+  // `[style.]` names no property: there is no style to judge.
+  it("reads no style from a binding that names no property", () => {
+    expect(found(`<div [style.]="tone" [style.color]="'red'"></div>`)).toEqual([
+      "shadcn/no-inline-styles: Inline style sets color",
+    ])
+  })
+
   it("judges each declaration of a style", () => {
     expect(
       found(`<div style="color: red; --tone: #fff; --gap: 4px"></div>`)
@@ -412,6 +426,238 @@ describe("Angular templates", () => {
       { filename: path.join(project, "app/card.component.html") }
     )
     expect(messages).toEqual([])
+  })
+
+  // An ICU's cases hold elements the parser keeps only in the i18n
+  // message. They are read from the template as any element is, as far
+  // as the i18n runtime creates them.
+  describe("elements in an ICU", () => {
+    const code = [
+      `<p>{count, plural,`,
+      `  =0 {<span class="flx bg-red-500" style="color: #f00">none</span>}`,
+      `  other {<b class="p-[13px] {{ extra }}">{{ count }}</b> {kind, select, svg {<svg><stop stop-color="#00ff00" /></svg>} other {<i class="text-[#123456]">x</i>}}}`,
+      `}</p>`,
+    ].join("\n")
+
+    it("are read by every rule a static attribute reaches", () => {
+      // The same elements outside the ICU, less what the runtime drops:
+      // the style attribute and the <svg>.
+      const flat = [
+        `<p>`,
+        `  <span class="flx bg-red-500">none</span>`,
+        `  <b class="p-[13px] {{ extra }}">{{ count }}</b> <i class="text-[#123456]">x</i>`,
+        `</p>`,
+      ].join("\n")
+      expect(found(flat)).toHaveLength(4)
+      expect(found(code)).toEqual(found(flat))
+    })
+
+    // The runtime creates an element only for a tag its sanitizer knows,
+    // with only the attributes it knows (VALID_ELEMENTS and VALID_ATTRS in
+    // @angular/core), names lowercased as the browser parses them. Another
+    // element is dropped with all it holds.
+    it("are only those the i18n runtime creates, with the attributes it keeps", () => {
+      expect(
+        found(
+          [
+            `<p>{n, plural, other {`,
+            `<span class="flx" color="#f00" style="color: #f00" fill="#f00" routerLinkActive="p-[1px]" ngClass="p-[2px]" bind-class="p-[3px]" styleClass="p-[4px]">a</span>`,
+            `<SPAN CLASS="p-[5px]">b</SPAN>`,
+            `<app-x class="p-[6px]"><span class="p-[7px]">c</span></app-x>`,
+            `<svg class="p-[8px]"><stop stop-color="#00ff00" /><text class="p-[9px]">d</text></svg>`,
+            `<ng-container><i class="p-[10px]">e</i></ng-container>`,
+            `<table><tbody><tr><td class="p-[11px]">f</td></tr></tbody></table>`,
+            // Outside a <table>, a cell's start tag is dropped, and what it
+            // holds is kept.
+            `<td class="p-[12px]"><span class="p-[13px]">g</span></td><tr class="p-[14px]"></tr><caption class="p-[15px]"></caption>`,
+            `}}</p>`,
+          ].join("")
+        )
+      ).toEqual([
+        `shadcn/no-unknown-classes: "flx" is not a class this project's Tailwind knows, so no CSS is generated for it`,
+        `shadcn/no-raw-colors: color="#f00" hardcodes a color`,
+        `shadcn/no-arbitrary-values: "p-[5px]" hardcodes an off-token value`,
+        `shadcn/no-arbitrary-values: "p-[11px]" hardcodes an off-token value`,
+        `shadcn/no-arbitrary-values: "p-[13px]" hardcodes an off-token value`,
+      ])
+    })
+
+    // Where an interpolation ends, as the compiler finds it: at the
+    // first `}}` outside a string, or past a `//` comment at the next.
+    it("leave out what an interpolation binds, strings in it included", () => {
+      const tokens = (value: string) =>
+        lint(`<p>{n, plural, other {<b class="${value}">a</b>}}</p>`).map(
+          (m) => m.message.split('"')[1]
+        )
+      expect(tokens(`p-[1px] {{ '}}' }} p-[2px]`)).toEqual([
+        "p-[1px]",
+        "p-[2px]",
+      ])
+      expect(tokens(`p-[1px] x{{ a ? '}} {{' : \`}}\` }}y p-[2px]`)).toEqual([
+        "p-[1px]",
+        "p-[2px]",
+      ])
+      expect(tokens(`p-[1px] {{ 'it\\'s }}' }} p-[2px]`)).toEqual([
+        "p-[1px]",
+        "p-[2px]",
+      ])
+      expect(tokens(`p-[1px] {{ a // '}} p-[2px]`)).toEqual([
+        "p-[1px]",
+        "p-[2px]",
+      ])
+      // One that never ends binds nothing: it is text.
+      expect(tokens(`p-[1px] {{ '}} p-[2px]`)).toContain("p-[2px]")
+      // Offsets count UTF-16 units: what follows a string of emoji is
+      // read whole, and rewritten where it is written.
+      const value = `{{ '🎉🎉🎉}}' }}x p-[2px]`
+      const code = `<p>{n, plural, other {<b class="${value}">a</b>}}</p>`
+      const [message] = lint(code)
+      expect(message.message).toContain(`"p-[2px]"`)
+      const { range, text } = message.suggestions![0].fix
+      expect(code.slice(0, range[0]) + text + code.slice(range[1])).toBe(
+        code.replace("p-[2px]", "p-0.5")
+      )
+    })
+
+    // The class is looked for where the binding is blanked, so one the
+    // binding also names is rewritten where it is a class.
+    it("rewrite a class, not the binding that names it too", () => {
+      const applied = (value: string) => {
+        const code = `<p>{n, plural, =0 {<span class="${value}">a</span>} other {x}}</p>`
+        const message = lint(code).find((m) => m.message.includes(`"flx"`))!
+        const fix = message.suggestions?.[0]?.fix
+        return fix
+          ? code.slice(0, fix.range[0]) + fix.text + code.slice(fix.range[1])
+          : null
+      }
+      expect(applied(`{{ flx }} flx`)).toBe(
+        `<p>{n, plural, =0 {<span class="{{ flx }} flex">a</span>} other {x}}</p>`
+      )
+      expect(applied(`a{{ x }} flx {{ flx }}`)).toBe(
+        `<p>{n, plural, =0 {<span class="a{{ x }} flex {{ flx }}">a</span>} other {x}}</p>`
+      )
+      // An entity moves the value off the source: with a binding blanked
+      // too, where the class is written cannot be told.
+      expect(applied(`{{ flx }} a&amp;b flx`)).toBeNull()
+    })
+
+    // A replacement shorter than the class shares a tail with what
+    // precedes it; the rewrite still spans the class alone.
+    it("rewrite a class into a shorter one in full", () => {
+      const applied = (value: string, token: string) => {
+        const code = `<p>{n, plural, =0 {<span class="${value}">a</span>} other {x}}</p>`
+        const message = lint(code).find((m) =>
+          m.message.includes(`"${token}"`)
+        )!
+        const fix = message.suggestions![0].fix
+        return code.slice(0, fix.range[0]) + fix.text + code.slice(fix.range[1])
+      }
+      expect(applied(`bg-primaryyy {{ a }} x`, "bg-primaryyy")).toBe(
+        `<p>{n, plural, =0 {<span class="bg-primary {{ a }} x">a</span>} other {x}}</p>`
+      )
+      expect(applied(`flexx {{ a }}`, "flexx")).toBe(
+        `<p>{n, plural, =0 {<span class="flex {{ a }}">a</span>} other {x}}</p>`
+      )
+    })
+
+    // Against a reference that splices the replacement into the source at
+    // the class's place, over random classes, replacements and bindings.
+    it("rewrite only the class, whatever the binding, class and replacement", () => {
+      let seed = 0x9e3779b9
+      const random = () => {
+        seed = (seed + 0x6d2b79f5) | 0
+        let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+      }
+      const pick = <T>(list: T[]) => list[Math.floor(random() * list.length)]
+      const words = ["p-4", "pp-4", "p-44", "a", "aa", "aXa", "x", "flex"]
+      words.push("flexx", "rounded", "roundedd", "bg-primary", "bg-primaryyy")
+      // A binding, with what is glued to it, blanked as the reader does.
+      const bound = (word: string) =>
+        pick([`{{ ${word} }}`, `${pick(words)}{{ ${word} }}`, `{{${word}}}x`])
+      let checked = 0
+      for (let n = 0; n < 20000; n++) {
+        const parts: string[] = []
+        const plain: string[] = []
+        for (let i = 0, k = 1 + (n % 5); i < k; i++) {
+          const word = pick(words)
+          const part = random() < 0.3 ? bound(word) : word
+          parts.push(part)
+          if (part === word) plain.push(word)
+        }
+        const inner = parts.join(random() < 0.2 ? "  " : " ")
+        const value = inner.replace(/\S*\{\{.*?\}\}\S*/g, (m) =>
+          " ".repeat(m.length)
+        )
+        const token = plain.length && random() < 0.9 ? pick(plain) : pick(words)
+        const replacement = pick(words)
+        const at = value.search(
+          new RegExp(`(?<=^|\\s)${token.replace(/[-]/g, "\\-")}(?=\\s|$)`)
+        )
+        if (token === replacement || at === -1) continue
+        const text = replaceInLiteral(
+          { type: "AngularLiteral", value, masked: true },
+          { sourceCode: { getText: () => `"${inner}"` } },
+          token,
+          replacement
+        )
+        const expected =
+          inner.slice(0, at) + replacement + inner.slice(at + token.length)
+        if (text !== `"${expected}"`) {
+          expect({ inner, token, replacement, text }).toEqual({
+            inner,
+            token,
+            replacement,
+            text: `"${expected}"`,
+          })
+        }
+        checked++
+      }
+      expect(checked).toBeGreaterThan(10000)
+    })
+
+    it("are placed where they are written, and rewritten there", () => {
+      const messages = lint(code)
+      const arbitrary = messages.find(
+        (m) => m.ruleId === "shadcn/no-arbitrary-values"
+      )!
+      expect(spanned(code, arbitrary)).toBe(`"p-[13px] {{ extra }}"`)
+      const { range, text } = arbitrary.suggestions![0].fix
+      expect(code.slice(0, range[0]) + text + code.slice(range[1])).toBe(
+        code.replace("p-[13px]", "p-3.25")
+      )
+    })
+
+    // The i18n runtime creates them as plain elements: no directive
+    // matches one.
+    it("are no element a contract judges", () => {
+      expect(
+        lint(
+          `{n, plural, other {<button hlmBtn class="bg-red-500">x</button>}}`,
+          {
+            "shadcn/no-restyle": [
+              "error",
+              { allow: ["layout"], contracts: [{ pattern: "hlmBtn" }] },
+            ],
+          }
+        )
+      ).toEqual([])
+    })
+
+    it("are read in an inline template", () => {
+      const inline = [
+        `import { Component } from "@angular/core"`,
+        `@Component({ selector: "x-i", template: \`<p>{n, plural, other {<span class="flx">x</span>}}</p>\` })`,
+        `export class InlineComponent {}`,
+      ].join("\n")
+      const messages = lintInline(
+        inline,
+        path.join(PROJECT, "src/app/icu-inline.component.ts")
+      )
+      expect(messages.map((m) => m.message.split('"')[1])).toEqual(["flx"])
+      expect(spanned(inline, messages[0])).toBe(`"flx"`)
+    })
   })
 
   describe("bindings", () => {
@@ -621,6 +867,21 @@ describe("Angular templates", () => {
         "ngIf:-",
         "class:-",
       ])
+    })
+
+    // A class one slip from one its CSS declares is that one misspelled,
+    // not a utility to declare.
+    it("suggests the class the component's styles declare that one slip misspells", () => {
+      const code = `<div class="card-footr card-heder"></div>`
+      const messages = lint(code, { "shadcn/no-unknown-classes": "error" })
+      expect(messages.map((m) => m.message)).toEqual([
+        `"card-footr" is not a class this project's Tailwind knows or its CSS declares, so no CSS is generated for it. Did you mean "card-footer", which its CSS declares?`,
+        `"card-heder" is not a class this project's Tailwind knows or its CSS declares, so no CSS is generated for it. Did you mean "card-header", which its CSS declares?`,
+      ])
+      const { range, text } = messages[0].suggestions![0].fix
+      expect(code.slice(0, range[0]) + text + code.slice(range[1])).toBe(
+        code.replace("card-footr", "card-footer")
+      )
     })
 
     it("knows a class the component's stylesheet declares", () => {
@@ -877,6 +1138,67 @@ describe("Angular templates", () => {
         `"inline-flex p-[13px]"`,
         `"m-[3px]"`,
       ])
+    })
+
+    // What `host` holds that is not written out may bind any class: the
+    // rules that read it say so once for the component.
+    describe("a host that cannot be read", () => {
+      let warnings: string[] = []
+      beforeEach(() => {
+        warnings = []
+        resetWarnings()
+        setWarningSink((message) => warnings.push(message))
+      })
+      afterEach(() => setWarningSink((message) => console.warn(message)))
+
+      const where = path.relative(process.cwd(), COMPONENT)
+      const warned = (reason: string) =>
+        `[@shadcn/lint] The host of HostComponent in ${where} cannot be read: ${reason}. The classes and styles it binds there are not checked.`
+
+      it("says so once for a host that is not an object written out", () => {
+        const code = [
+          `import { Component } from "@angular/core"`,
+          `const HOST = { "[class]": "'p-[13px]'" }`,
+          `@Component({ selector: "app-host", host: HOST })`,
+          "export class HostComponent {}",
+        ].join("\n")
+        lintTs(code)
+        expect(warnings).toEqual([warned("host is `HOST`, not an object")])
+      })
+
+      it("says so for a spread, a computed key, or a binding that is no string", () => {
+        for (const [line, reason] of [
+          ["...BASE", "it spreads `...BASE`"],
+          ["[KEY]: 'p-4'", "a key is computed"],
+          [
+            "\"[class]\": `on ? ${A} : 'p-2'`",
+            "`[class]` holds an expression, not a string",
+          ],
+          [
+            '"[style.color]": TONE',
+            "`[style.color]` holds `TONE`, not a string",
+          ],
+        ]) {
+          warnings = []
+          resetWarnings()
+          lintTs(component([`class: "p-[13px]"`, line]))
+          expect(warnings).toEqual([warned(reason)])
+        }
+      })
+
+      it("says nothing of a host it reads", () => {
+        lintTs(
+          component([
+            `class: "p-4"`,
+            `"[class]": "on ? 'p-4' : 'p-2'"`,
+            `"[class.p-4]": ON`,
+            `"[style.color]": \`tone\``,
+            `"(click)": HANDLER`,
+            `"[attr.title]": TITLE`,
+          ])
+        )
+        expect(warnings).toEqual([])
+      })
     })
 
     describe("with another compiler", () => {
@@ -1212,6 +1534,21 @@ describe("Angular templates", () => {
         }
       })
 
+      it("numbers inline templates the way angular-eslint's processor does", () => {
+        useParser(kind)
+        try {
+          const file = path.join(PROJECT, "src/app/inline-numbering.ts")
+          const messages = lintInline(fs.readFileSync(file, "utf8"), file)
+          expect(
+            messages
+              .filter((m) => m.ruleId === "shadcn/no-unknown-classes")
+              .map((m) => m.message.split('"')[1])
+          ).toEqual(["nested-unknown", "last-unknown"])
+        } finally {
+          useParser(null)
+        }
+      })
+
       // `:host(.x)` in a component's styles compiles to `.x[_nghost-…]`:
       // it styles the component's element where another template uses
       // it. The component is found among what the template's component
@@ -1314,6 +1651,32 @@ describe("Angular templates", () => {
       expect(warnings).toEqual([])
     })
 
+    // A package's stylesheet, an icon font's, names hundreds of classes a
+    // word is a slip from; only the project's own are suggested.
+    it("suggests a class the project's global stylesheets write, not a package's", () => {
+      const dir = path.join(FIXTURES, "angular-workspace")
+      const messages = new Linter({ cwd: dir })
+        .verify(
+          `<div class="page-shel fi-chek"></div>`,
+          [
+            {
+              files: ["**/*.html"],
+              languageOptions: { parser: ngParser as any },
+              plugins: { shadcn: plugin as any },
+              rules: { "shadcn/no-unknown-classes": "error" },
+            },
+          ],
+          { filename: path.join(dir, "src/app/page.component.html") }
+        )
+        .map((m) => m.message)
+      expect(messages).toEqual([
+        expect.stringContaining(
+          `Did you mean "page-shell", which its CSS declares?`
+        ),
+        expect.not.stringContaining("Did you mean"),
+      ])
+    })
+
     it("reads the styles of the project the file is in", () => {
       expect(
         unknownIn(
@@ -1349,6 +1712,728 @@ describe("Angular templates", () => {
       ])
     })
 
+    // A workspace file is the user's to get wrong: what cannot be read is
+    // skipped and said once, and linting goes on.
+    it("skips the fields of a workspace config it cannot read, and says so once", () => {
+      const lintIn = (dir: string, file: string) =>
+        new Linter({ cwd: dir })
+          .verify(
+            `<div class="good-global zz-unknown"></div>`,
+            [
+              {
+                files: ["**/*.html"],
+                languageOptions: { parser: ngParser as any },
+                plugins: { shadcn: plugin as any },
+                rules: { "shadcn/no-unknown-classes": "error" },
+              },
+            ],
+            { filename: path.join(dir, file) }
+          )
+          .map((m) => m.message.split('"')[1])
+      const workspace = (config: string) => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "shadcn-ng-config-"))
+        fs.mkdirSync(path.join(dir, "src/app"), { recursive: true })
+        fs.writeFileSync(path.join(dir, "src/global.css"), ".good-global {}")
+        fs.writeFileSync(path.join(dir, "angular.json"), config)
+        return dir
+      }
+      const good = {
+        root: "",
+        architect: {
+          build: {
+            options: {
+              styles: ["src/global.css", 7, { input: 8 }],
+              stylePreprocessorOptions: { includePaths: [9] },
+            },
+          },
+        },
+      }
+      const fields = workspace(
+        JSON.stringify({
+          projects: {
+            bad: { root: 5, architect: { build: { options: { styles: 6 } } } },
+            odd: { root: "odd", architect: "build" },
+            list: {
+              root: "list",
+              architect: { build: { options: { styles: "x.css" } } },
+            },
+            nil: null,
+            good,
+          },
+        })
+      )
+      // A config that cannot be read at all is no workspace.
+      const broken = workspace(`{ "projects": `)
+      // In an Nx workspace, a project.json that cannot be read.
+      const nx = fs.mkdtempSync(path.join(os.tmpdir(), "shadcn-ng-nx-"))
+      fs.writeFileSync(path.join(nx, "nx.json"), "{}")
+      fs.mkdirSync(path.join(nx, "apps/a/src"), { recursive: true })
+      fs.mkdirSync(path.join(nx, "apps/b/src"), { recursive: true })
+      fs.writeFileSync(path.join(nx, "apps/a/project.json"), "[]")
+      fs.writeFileSync(
+        path.join(nx, "apps/b/src/global.css"),
+        ".good-global {}"
+      )
+      fs.writeFileSync(
+        path.join(nx, "apps/b/project.json"),
+        JSON.stringify({
+          targets: {
+            build: {
+              executor: "@nx/angular:application",
+              options: { styles: ["apps/b/src/global.css"] },
+            },
+            test: { executor: 5 },
+          },
+        })
+      )
+      try {
+        expect(lintIn(nx, "apps/b/src/page.html")).toEqual(["zz-unknown"])
+        expect(lintIn(nx, "apps/a/src/page.html")).toEqual(["zz-unknown"])
+        expect(lintIn(fields, "src/app/page.html")).toEqual(["zz-unknown"])
+        expect(lintIn(fields, "src/app/other.html")).toEqual(["zz-unknown"])
+        expect(lintIn(broken, "src/app/page.html")).toEqual([
+          "good-global",
+          "zz-unknown",
+        ])
+        expect(
+          warnings.filter(
+            (w) => w.includes("nx.json") || w.includes("project.json")
+          )
+        ).toEqual([
+          `[@shadcn/lint] ${path.join(nx, "nx.json")} has fields that are not read, since they are not what Angular takes there: apps/a/project.json (not a JSON object).`,
+        ])
+        expect(warnings.filter((w) => w.includes("angular.json"))).toEqual([
+          `[@shadcn/lint] ${path.join(fields, "angular.json")} has fields that are not read, since they are not what Angular takes there: projects.bad.root (not a string), projects.odd.architect (not an object), projects.list.architect.build.options.styles (not a list), projects.nil (not an object), projects.good.architect.build.options.styles[1] (not a path or { input }), projects.good.architect.build.options.styles[2] (not a path or { input }), projects.good.architect.build.options.stylePreprocessorOptions.includePaths[0] (not a string).`,
+          `[@shadcn/lint] ${path.join(broken, "angular.json")} cannot be read: it is not a JSON object. The global styles it names are not read.`,
+        ])
+      } finally {
+        for (const dir of [fields, broken, nx])
+          fs.rmSync(dir, { recursive: true, force: true })
+      }
+    })
+
+    // What Angular builds a project with is what its templates see.
+    describe("the global styles of a workspace", () => {
+      let dir = ""
+      beforeEach(() => {
+        dir = fs.realpathSync.native(
+          fs.mkdtempSync(path.join(os.tmpdir(), "shadcn-ng-global-"))
+        )
+      })
+      afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
+      const write = (files: Record<string, string>) => {
+        for (const [file, text] of Object.entries(files)) {
+          fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true })
+          fs.writeFileSync(path.join(dir, file), text)
+        }
+      }
+      const unknown = (file: string, classes: string) =>
+        new Linter({ cwd: dir })
+          .verify(
+            `<div class="${classes}"></div>`,
+            [
+              {
+                files: ["**/*.html"],
+                languageOptions: { parser: ngParser as any },
+                plugins: { shadcn: plugin as any },
+                rules: { "shadcn/no-unknown-classes": "error" },
+              },
+            ],
+            { filename: path.join(dir, file) }
+          )
+          .map((m) => m.message.split('"')[1])
+      const angularJson = (architect: object) =>
+        JSON.stringify({ projects: { app: { root: "", architect } } })
+
+      // `"styles": ["tailwindcss"]`, `["kit"]`: a package's stylesheet, as
+      // Angular's stylesheet bundler resolves one, never its JavaScript.
+      it("reads a package a style names as a stylesheet", () => {
+        write({
+          "angular.json": angularJson({
+            build: {
+              builder: "@angular/build:application",
+              options: { styles: ["kit", "twlike"] },
+            },
+          }),
+          "node_modules/kit/package.json": JSON.stringify({
+            name: "kit",
+            main: "index.js",
+            style: "dist/kit.css",
+          }),
+          "node_modules/kit/index.js": "value.length; [].map(f).filter(g)",
+          "node_modules/kit/dist/kit.css": ".kit-css { }",
+          "node_modules/twlike/package.json": JSON.stringify({
+            name: "twlike",
+            exports: {
+              ".": { style: "./index.css", import: "./lib.mjs" },
+            },
+          }),
+          "node_modules/twlike/lib.mjs": "export const value = x.length",
+          "node_modules/twlike/index.css": ".tw-css { }",
+        })
+        expect(
+          unknown("src/app/page.html", "kit-css tw-css length map value zz")
+        ).toEqual(["length", "map", "value", "zz"])
+      })
+
+      it("reads the styles of the targets that build, not those of tests", () => {
+        write({
+          "angular.json": angularJson({
+            build: {
+              builder: "@angular/build:application",
+              options: { styles: ["src/global.css"] },
+            },
+            test: { options: { styles: ["src/test.scss"] } },
+            spec: {
+              builder: "@angular/build:karma",
+              options: { styles: ["src/test.scss"] },
+            },
+          }),
+          "src/global.css": ".good-global { }",
+          "src/test.scss": `@import "~unresolved"; .test-only { }`,
+        })
+        warnings.length = 0
+        expect(unknown("src/app/page.html", "good-global test-only")).toEqual([
+          "test-only",
+        ])
+        expect(warnings).toEqual([])
+      })
+
+      // Two Nx applications that name the same stylesheet, which is not
+      // there: each is skipped, and each says so.
+      it("reads each project's styles as its own", () => {
+        const app = (name: string) => ({
+          [`apps/${name}/project.json`]: JSON.stringify({
+            targets: {
+              build: {
+                executor: "@nx/angular:application",
+                options: { styles: ["libs/shared/missing.css"] },
+              },
+            },
+          }),
+        })
+        write({ "nx.json": "{}", ...app("a"), ...app("b") })
+        warnings.length = 0
+        expect(unknown("apps/a/src/page.html", "zz")).toEqual([])
+        expect(unknown("apps/b/src/page.html", "zz")).toEqual([])
+        expect(warnings).toEqual(
+          ["a", "b"].map(
+            (name) =>
+              `[@shadcn/lint] The global styles apps/${name}/project.json names cannot be read: the stylesheet libs/shared/missing.css does not exist. shadcn/no-unknown-classes is skipped in this project, since any class may be one they declare.`
+          )
+        )
+      })
+
+      // A style that names no stylesheet says what it names instead, as
+      // settings.shadcn.entryPoint does.
+      it.each([
+        ["", `an empty path names no stylesheet`],
+        ["src/app", `src/app is a directory, not a stylesheet`],
+        ["src/missing.css", `the stylesheet src/missing.css does not exist`],
+      ])("names what the style %j is", (style, reason) => {
+        write({
+          "angular.json": angularJson({
+            build: {
+              builder: "@angular/build:application",
+              options: { styles: [style] },
+            },
+          }),
+          "src/app/page.html": "",
+        })
+        warnings.length = 0
+        expect(unknown("src/app/page.html", "zz")).toEqual([])
+        expect(warnings.filter((w) => w.includes("global styles"))).toEqual([
+          `[@shadcn/lint] The global styles angular.json names cannot be read: ${reason}. shadcn/no-unknown-classes is skipped in this project, since any class may be one they declare.`,
+        ])
+      })
+
+      it("names a component's stylesheet that is a directory", () => {
+        write({
+          "src/app/page.component.ts": [
+            `import { Component } from "@angular/core"`,
+            `@Component({ selector: "app-page", templateUrl: "./page.component.html", styleUrls: ["./styles", ""] })`,
+            `export class PageComponent {}`,
+          ].join("\n"),
+          "src/app/styles/a.css": ".a { }",
+          "src/app/page.component.html": "",
+        })
+        warnings.length = 0
+        expect(unknown("src/app/page.component.html", "zz")).toEqual([])
+        expect(warnings.filter((w) => w.includes("The styles of"))).toEqual([
+          "[@shadcn/lint] The styles of PageComponent in src/app/page.component.ts cannot be read: ./styles is a directory, not a stylesheet. shadcn/no-unknown-classes is skipped in its template and in the classes of its element in others, since any class there may be one they declare.",
+        ])
+      })
+
+      it("reads a workspace config that starts with a byte order mark", () => {
+        write({
+          "angular.json":
+            "﻿" +
+            angularJson({
+              build: {
+                builder: "@angular/build:application",
+                options: { styles: ["src/global.css"] },
+              },
+            }),
+          "src/global.css": ".good-global { }",
+        })
+        warnings.length = 0
+        expect(unknown("src/app/page.html", "good-global zz")).toEqual(["zz"])
+        expect(warnings).toEqual([])
+      })
+
+      // An Nx workspace is scanned for its project.json files to a depth
+      // and a count; what lies past them is not read, and that is said.
+      it("says when a project lies past where an Nx workspace is scanned", () => {
+        const project = JSON.stringify({
+          targets: {
+            build: {
+              executor: "@nx/angular:application",
+              options: { styles: ["global.css"] },
+            },
+          },
+        })
+        write({
+          "nx.json": "{}",
+          "global.css": ".good-global { }",
+          "libs/a/b/c/d/e/f/project.json": project,
+        })
+        warnings.length = 0
+        unknown("libs/a/b/c/d/e/f/src/page.html", "zz")
+        unknown("libs/a/b/c/d/e/f/src/other.html", "zz")
+        expect(warnings).toEqual([
+          `[@shadcn/lint] ${path.join(dir, "libs/a/b/c/d/e/f/project.json")} is more than 5 directories below ${path.join(dir, "nx.json")}, past where an Nx workspace is read, so the global styles its project names are not read.`,
+        ])
+        // A deep directory with no project.json in it says nothing.
+        warnings.length = 0
+        write({ "apps/web/project.json": project })
+        unknown("apps/web/src/app/a/b/c/d/e/page.html", "zz")
+        expect(warnings).toEqual([])
+      })
+
+      it("says when an Nx workspace holds more project.json files than are read", () => {
+        const files: Record<string, string> = { "nx.json": "{}" }
+        for (let i = 0; i < 501; i++) {
+          files[`libs/p${String(i).padStart(3, "0")}/project.json`] = "{}"
+        }
+        write(files)
+        warnings.length = 0
+        unknown("libs/p000/src/page.html", "zz")
+        expect(warnings).toEqual([
+          `[@shadcn/lint] ${path.join(dir, "nx.json")} is an Nx workspace with more than 500 project.json files. Those past the first 500 are not read, nor the global styles their projects name.`,
+        ])
+      })
+    })
+
+    // `ng add tailwindcss` writes src/tailwind.css with Tailwind alone;
+    // spartan's CLI writes the Tailwind imports, its preset and the theme
+    // into src/styles.scss. Angular's build hands each to Tailwind on its
+    // own, so the app's classes are those of the second.
+    describe("the Tailwind entry among the global styles", () => {
+      let dir = ""
+      beforeEach(() => {
+        dir = fs.realpathSync.native(
+          fs.mkdtempSync(path.join(os.tmpdir(), "shadcn-ng-entry-"))
+        )
+        fs.symlinkSync(
+          path.resolve(PROJECT, "../../../node_modules"),
+          path.join(dir, "node_modules")
+        )
+      })
+      afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
+      const SPLIT = [
+        `@layer theme, base, components, utilities;`,
+        `@import "tailwindcss/theme.css" layer(theme);`,
+        `@import "tailwindcss/utilities.css";`,
+      ].join("\n")
+      const THEME = `@theme { --color-brand: oklch(0.55 0.2 250); }`
+      const workspace = (styles: string, settings: object = {}) => {
+        const files: Record<string, string> = {
+          "package.json": `{ "name": "app", "private": true }`,
+          "angular.json": JSON.stringify({
+            projects: {
+              app: {
+                root: "",
+                architect: {
+                  build: {
+                    options: {
+                      styles: ["src/tailwind.css", "src/styles.scss"],
+                    },
+                  },
+                },
+              },
+            },
+          }),
+          "src/tailwind.css": `@import "tailwindcss";`,
+          "src/styles.scss": styles,
+          // Partials Sass finds and Tailwind's compiler does not.
+          "src/_variables.scss": `$gap: 4px;`,
+          "src/_tokens.scss": `@theme { --color-sea: blue; }`,
+          "src/_theme.scss": `$brand: red;`,
+        }
+        for (const [file, text] of Object.entries(files)) {
+          fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true })
+          fs.writeFileSync(path.join(dir, file), text)
+        }
+        return (code: string, file = "src/app/page.html") =>
+          new Linter({ cwd: dir })
+            .verify(
+              code,
+              [
+                {
+                  files: ["**/*.html", "**/*.tsx", "**/*.ts"],
+                  languageOptions: {
+                    parser: (file.endsWith(".html")
+                      ? ngParser
+                      : tsParser) as any,
+                    parserOptions: { ecmaFeatures: { jsx: true } },
+                  },
+                  plugins: { shadcn: plugin as any },
+                  settings: { shadcn: settings },
+                  rules: {
+                    "shadcn/no-raw-colors": "error",
+                    "shadcn/no-unknown-classes": "error",
+                  },
+                },
+              ],
+              { filename: path.join(dir, file) }
+            )
+            .map((m) => m.message)
+      }
+      const PAGE = `<div class="text-brandd bg-red-500 flex"></div>`
+
+      it("is the one that imports Tailwind with the theme, Sass included", () => {
+        const lint = workspace(
+          [
+            SPLIT,
+            THEME,
+            `@use "sass:math";`,
+            `$gap: 4px;`,
+            `.page { &-header { margin: math.div($gap, 2); } }`,
+          ].join("\n")
+        )
+        expect(lint(PAGE)).toEqual([
+          expect.stringContaining(
+            `"text-brandd" is not a declared theme color. Did you mean "text-brand"?`
+          ),
+          expect.stringContaining(
+            `declare --color-<name> in src/styles.scss for a new color`
+          ),
+        ])
+        expect(warnings).toEqual([])
+      })
+
+      // Sass passes a custom property's value through as written but for
+      // an interpolation: a `//` there is no comment, to Sass or to CSS.
+      it("is one whose custom property holds a //, which Sass passes through", () => {
+        const lint = workspace(
+          [
+            SPLIT,
+            `:root { --logo: url(https://cdn.test/a.svg); --docs: https://docs.test/x; --grid: 1fr//2; }`,
+            `.page { --gap: { a: b; }; color: red; }`,
+            THEME,
+          ].join("\n")
+        )
+        expect(lint(PAGE)).toContainEqual(
+          expect.stringContaining(`Did you mean "text-brand"?`)
+        )
+        expect(warnings).toEqual([])
+        warnings.length = 0
+        resetWarnings()
+        resetFsMemo()
+        workspace(
+          [
+            SPLIT,
+            `:root { --docs: https://docs.test/x; } // Brand.`,
+            THEME,
+          ].join("\n")
+        )(PAGE)
+        expect(warnings).toEqual([
+          expect.stringContaining(
+            "line 4 has a // comment, which only Sass skips"
+          ),
+        ])
+        warnings.length = 0
+        resetWarnings()
+        resetFsMemo()
+        workspace([SPLIT, `:root { --x: #{$a}; }`, THEME].join("\n"))(PAGE)
+        expect(warnings).toEqual([
+          expect.stringContaining("line 4 has a Sass interpolation, #{…}"),
+        ])
+      })
+
+      // A React file beside it is not styled by Angular's global styles:
+      // its theme is found as upstream finds it.
+      it("is not the theme of a React file in the workspace", () => {
+        const lint = workspace([SPLIT, THEME].join("\n"))
+        expect(
+          lint(
+            `export const A = () => <div className="zz-box" />`,
+            "src/react/a.tsx"
+          )
+        ).toEqual([
+          expect.stringContaining(
+            `declare it with @utility in src/tailwind.css`
+          ),
+        ])
+        expect(lint(`<div class="zz-box"></div>`)).toEqual([
+          expect.stringContaining(
+            `declare it with @utility in src/styles.scss`
+          ),
+        ])
+        expect(warnings).toEqual([])
+      })
+
+      // A helper of the app imports nothing from Angular: under the root
+      // of an Angular project it is the app's. Outside one, a package's
+      // dependency on Angular does not make it so.
+      it("is the theme of the app's other scripts", () => {
+        const lint = workspace([SPLIT, THEME].join("\n"))
+        const helper = `export const box = cn("zz-box")`
+        expect(lint(helper, "src/app/box.ts")).toEqual([
+          expect.stringContaining(
+            `declare it with @utility in src/styles.scss`
+          ),
+        ])
+        // A component file of another framework there finds its own.
+        expect(
+          lint(`export const A = () => <div className="zz-box" />`, "src/a.tsx")
+        ).toEqual([
+          expect.stringContaining(
+            `declare it with @utility in src/tailwind.css`
+          ),
+        ])
+        const json = JSON.parse(
+          fs.readFileSync(path.join(dir, "angular.json"), "utf8")
+        )
+        json.projects.app.root = "src"
+        fs.writeFileSync(path.join(dir, "angular.json"), JSON.stringify(json))
+        fs.writeFileSync(
+          path.join(dir, "package.json"),
+          `{ "name": "app", "dependencies": { "@angular/core": "^22.0.0" } }`
+        )
+        resetFsMemo()
+        expect(lint(helper, "tools/box.ts")).toEqual([
+          expect.stringContaining(
+            `declare it with @utility in src/tailwind.css`
+          ),
+        ])
+        expect(lint(helper, "src/app/box.ts")).toEqual([
+          expect.stringContaining(
+            `declare it with @utility in src/styles.scss`
+          ),
+        ])
+      })
+
+      // What only Sass reads, Tailwind's compiler reads otherwise: the
+      // entry is found as before, and that is said once.
+      it.each([
+        [
+          `// The app's theme.\n${SPLIT}\n${THEME}`,
+          "line 1 has a // comment, which only Sass skips",
+        ],
+        [
+          `@use "tailwindcss";\n${THEME}`,
+          "line 1 loads Tailwind with @use, which only Sass follows",
+        ],
+        [
+          `${SPLIT}\n$size: 2;\n.gap-#{$size} { gap: 1px; }\n${THEME}`,
+          "line 5 has a Sass interpolation, #{…}",
+        ],
+        [
+          `${SPLIT}\n@import "variables";\n${THEME}`,
+          `line 4 imports "variables", which names no stylesheet Tailwind can load, such as a Sass partial`,
+        ],
+        // Tailwind keeps a Sass module rule as written: the tokens of the
+        // partial it names are not read.
+        [
+          `@use "sass:math";\n@use './tokens';\n${SPLIT}\n${THEME}`,
+          `line 2 loads "./tokens" with @use, which only Sass follows`,
+        ],
+        [
+          `${SPLIT}\n@forward "theme" show $brand;\n${THEME}`,
+          `line 4 loads "theme" with @forward, which only Sass follows`,
+        ],
+        [
+          `@use "sass:meta";\n${SPLIT}\n@include meta.load-css("./tokens");\n${THEME}`,
+          `line 5 loads "./tokens" with meta.load-css, which only Sass follows`,
+        ],
+        // What reads as CSS but Tailwind's compiler stops at.
+        [
+          `${SPLIT}\n${THEME}\n.page { color: red;`,
+          `building it stops with "Missing closing } at .page"`,
+        ],
+      ])(
+        "falls back where the stylesheet reads otherwise in Sass: %#",
+        (styles, reason) => {
+          const lint = workspace(styles)
+          // The classes are those of the CSS entry found as before, not
+          // the grammar's.
+          expect(lint(`<div class="flx"></div>`)).toEqual([
+            expect.stringContaining(`Did you mean "flex"?`),
+          ])
+          lint(PAGE)
+          lint(`<div></div>`, "src/app/other.html")
+          expect(warnings).toEqual([
+            `[@shadcn/lint] src/styles.scss imports Tailwind and holds the theme, but Tailwind's compiler cannot read it as written: ${reason}. The theme is read from src/tailwind.css instead. Import Tailwind and the theme from a CSS file among the styles of angular.json, or set settings.shadcn.entryPoint to one.`,
+          ])
+        }
+      )
+
+      // Tailwind builds each global stylesheet on its own: of two that
+      // import it with a theme, the classes are one's or the other's.
+      it("takes the one that declares the most tokens of several, and says so", () => {
+        const lint = workspace(
+          `${SPLIT}\n@theme { --color-brand: oklch(0.55 0.2 250); --color-ink: #000; }`
+        )
+        fs.writeFileSync(
+          path.join(dir, "src/tailwind.css"),
+          `@import "tailwindcss";\n@theme { --color-sea: blue; }`
+        )
+        expect(lint(PAGE)).toContainEqual(
+          expect.stringContaining(`Did you mean "text-brand"?`)
+        )
+        lint(`<div></div>`, "src/app/other.html")
+        expect(warnings).toEqual([
+          "[@shadcn/lint] src/tailwind.css and src/styles.scss among the styles of angular.json each import Tailwind with a theme, and Tailwind builds each on its own. The theme is read from src/styles.scss, which declares the most tokens. Set settings.shadcn.entryPoint to the one the app's classes come from.",
+        ])
+        warnings.length = 0
+        resetWarnings()
+        workspace(
+          `${SPLIT}\n@theme { --color-brand: oklch(0.55 0.2 250); --color-ink: #000; }`,
+          { entryPoint: "src/tailwind.css" }
+        )(PAGE)
+        expect(warnings).toEqual([])
+      })
+
+      it("says when the theme is read from a stylesheet that holds none while a global one does", () => {
+        const lint = workspace([SPLIT, THEME].join("\n"), {
+          entryPoint: "src/tailwind.css",
+        })
+        lint(PAGE)
+        expect(warnings).toEqual([
+          "[@shadcn/lint] The theme is read from src/tailwind.css, which holds no @theme, @plugin, @utility or @custom-variant, while src/styles.scss among the styles of angular.json does. Tailwind builds each global stylesheet on its own, so the app's classes come from the one that imports Tailwind with the theme: set settings.shadcn.entryPoint to src/styles.scss.",
+        ])
+      })
+
+      // A project that names no styles of its own: a library, styled by
+      // the apps that use it, or an app whose builder lists none, such as
+      // Analog's, which imports its own stylesheet.
+      const nx = (files: Record<string, string>) => {
+        for (const [file, text] of Object.entries({
+          "package.json": `{ "name": "ws", "private": true }`,
+          "nx.json": "{}",
+          "apps/shop/project.json": JSON.stringify({
+            targets: {
+              build: {
+                executor: "@nx/angular:application",
+                options: {
+                  styles: [
+                    "apps/shop/src/tailwind.css",
+                    "apps/shop/src/styles.scss",
+                  ],
+                },
+              },
+            },
+          }),
+          "apps/shop/src/tailwind.css": `@import "tailwindcss";`,
+          "apps/shop/src/styles.scss": `${SPLIT}\n${THEME}`,
+          ...files,
+        })) {
+          fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true })
+          fs.writeFileSync(path.join(dir, file), text)
+        }
+        return (file: string) =>
+          new Linter({ cwd: dir })
+            .verify(
+              `<div class="zz-box"></div>`,
+              [
+                {
+                  files: ["**/*.html"],
+                  languageOptions: { parser: ngParser as any },
+                  plugins: { shadcn: plugin as any },
+                  rules: { "shadcn/no-unknown-classes": "error" },
+                },
+              ],
+              { filename: path.join(dir, file) }
+            )
+            .map((m) => m.message)
+      }
+
+      it("is the apps' for a library, when what is found under it holds no theme", () => {
+        const lint = nx({ "libs/ui/project.json": `{ "targets": {} }` })
+        expect(lint("libs/ui/src/button.html")).toEqual([
+          expect.stringContaining("@utility in apps/shop/src/styles.scss"),
+        ])
+        expect(warnings).toEqual([])
+      })
+
+      // Of several apps, which one a library is built for is not written
+      // anywhere the linter reads.
+      it("is one of the apps' for a library, said when several hold a theme", () => {
+        const lint = nx({
+          "libs/ui/project.json": `{ "targets": {} }`,
+          "apps/admin/project.json": JSON.stringify({
+            targets: {
+              build: {
+                executor: "@nx/angular:application",
+                options: { styles: ["apps/admin/src/styles.css"] },
+              },
+            },
+          }),
+          "apps/admin/src/styles.css": `@import "tailwindcss";\n@theme { --color-a: #000; --color-b: #111; }`,
+        })
+        expect(lint("libs/ui/src/button.html")).toEqual([
+          expect.stringContaining("@utility in apps/admin/src/styles.css"),
+        ])
+        lint("libs/ui/src/card.html")
+        expect(warnings).toEqual([
+          "[@shadcn/lint] A project that names no global styles of its own, as a library styled by the apps that use it, takes those of every project in the workspace, and apps/admin/src/styles.css and apps/shop/src/styles.scss among them each import Tailwind with a theme. The theme of its files is read from apps/admin/src/styles.css. Set settings.shadcn.entryPoint to the entry of the app it is built for.",
+        ])
+        // An app is said nothing of: its own styles hold one theme.
+        warnings.length = 0
+        resetWarnings()
+        lint("apps/shop/src/app/page.html")
+        expect(warnings).toEqual([])
+      })
+
+      it("is the app's own for one whose builder lists no styles, when that holds the theme", () => {
+        const lint = nx({
+          "apps/site/project.json": JSON.stringify({
+            targets: { build: { executor: "@analogjs/platform:vite" } },
+          }),
+          "apps/site/src/styles.css": `@import "tailwindcss";\n@theme { --color-brand: #123456; --color-ink: #000; }`,
+        })
+        expect(lint("apps/site/src/app/page.html")).toEqual([
+          expect.stringContaining("@utility in apps/site/src/styles.css"),
+        ])
+        expect(warnings).toEqual([])
+      })
+
+      it("says when a named Sass entry cannot be read as written", () => {
+        const lint = workspace(`${SPLIT}\n// Brand.\n${THEME}`, {
+          entryPoint: "src/styles.scss",
+        })
+        lint(PAGE)
+        expect(warnings).toEqual([
+          "[@shadcn/lint] src/styles.scss, the Tailwind entry the settings or components.json name, is read as Tailwind's compiler reads it, as CSS, and it cannot be read so as written: line 4 has a // comment, which only Sass skips. What follows there is misread. Import Tailwind and the theme from a CSS file, and name that instead.",
+        ])
+      })
+
+      it("leaves a named entry alone, though a Sass one cannot be read", () => {
+        const lint = workspace(`@use "tailwindcss";\n${THEME}`, {
+          entryPoint: "src/theme-entry.css",
+        })
+        fs.writeFileSync(
+          path.join(dir, "src/theme-entry.css"),
+          `@import "tailwindcss";\n${THEME}`
+        )
+        expect(lint(PAGE)).toContainEqual(
+          expect.stringContaining(`Did you mean "text-brand"?`)
+        )
+        expect(warnings).toEqual([])
+      })
+    })
+
     it("warns once when Tailwind is imported only from Sass", () => {
       for (const name of ["p-4", "p-5"]) {
         unknownIn(
@@ -1362,8 +2447,42 @@ describe("Angular templates", () => {
         path.join(FIXTURES, "angular-sass-entry")
       )
       expect(warnings).toEqual([
-        `[@shadcn/lint] src/styles.scss imports Tailwind, but a Sass file is not read as the Tailwind entry and no CSS file under ${where} imports it, so no-unknown-classes reads classes with the grammar bundled with @shadcn/lint, and the project's theme is not read. Tailwind v4 is not meant to be used with Sass: write a CSS file that imports Tailwind, the theme and the same plugins, and set settings.shadcn.entryPoint to it.`,
+        `[@shadcn/lint] src/styles.scss imports Tailwind, but no CSS file under ${where} does, and a Sass file is read as the Tailwind entry only among the global styles of angular.json or project.json, so no-unknown-classes reads classes with the grammar bundled with @shadcn/lint, and the project's theme is not read. Set settings.shadcn.entryPoint to a stylesheet written as CSS that imports Tailwind with the theme.`,
       ])
+    })
+
+    // spartan's theme imports Tailwind's stylesheets one by one.
+    it("takes Tailwind's own stylesheets, imported one by one from Sass, for importing Tailwind", () => {
+      const dir = fs.realpathSync.native(
+        fs.mkdtempSync(path.join(os.tmpdir(), "shadcn-ng-split-"))
+      )
+      try {
+        fs.mkdirSync(path.join(dir, "src/app"), { recursive: true })
+        fs.writeFileSync(path.join(dir, "package.json"), `{ "name": "split" }`)
+        fs.writeFileSync(
+          path.join(dir, "src/styles.scss"),
+          `@import 'tailwindcss/theme.css' layer(theme);\n@import 'tailwindcss/utilities.css';`
+        )
+        new Linter({ cwd: dir }).verify(
+          `<div class="p-4"></div>`,
+          [
+            {
+              files: ["**/*.html"],
+              languageOptions: { parser: ngParser as any },
+              plugins: { shadcn: plugin as any },
+              rules: { "shadcn/no-unknown-classes": "error" },
+            },
+          ],
+          { filename: path.join(dir, "src/app/page.html") }
+        )
+        expect(warnings).toEqual([
+          expect.stringContaining(
+            "src/styles.scss imports Tailwind, but no CSS file under"
+          ),
+        ])
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
     })
 
     it("warns once when no stylesheet imports Tailwind", () => {
@@ -1421,14 +2540,32 @@ describe("Angular templates", () => {
       ])
     })
 
-    // A script file in a project of any framework.
-    const scriptIn = (workspace: string, file: string) => {
+    it("says an empty settings.shadcn.entryPoint names no stylesheet", () => {
+      unknownWith("", `<div></div>`)
+      expect(warnings[0]).toBe(
+        "[@shadcn/lint] settings.shadcn.entryPoint is empty, and an empty path names no stylesheet; it is ignored."
+      )
+    })
+
+    it("says a directory set as settings.shadcn.entryPoint is one", () => {
+      unknownWith("styles", `<div></div>`)
+      expect(warnings).toEqual([
+        "[@shadcn/lint] settings.shadcn.entryPoint is styles, which is a directory, not a stylesheet. No stylesheet importing Tailwind was found under the project, so no-unknown-classes reads classes with the grammar bundled with @shadcn/lint until the path is fixed.",
+      ])
+    })
+
+    // A script file: React, or Angular when it imports Angular.
+    const REACT = `export const A = () => <div className="flex p-4" />`
+    const ANGULAR = `import { Component } from "@angular/core"
+      @Component({ selector: "x-a", template: "" })
+      export class A { classes = "flex p-4" }`
+    const scriptIn = (workspace: string, file: string, code = ANGULAR) => {
       const dir = path.join(FIXTURES, workspace)
       return new Linter({ cwd: dir }).verify(
-        `export const A = () => <div className="flex p-4" />`,
+        code,
         [
           {
-            files: ["**/*.tsx"],
+            files: ["**/*.tsx", "**/*.ts"],
             languageOptions: {
               parser: tsParser as any,
               parserOptions: { ecmaFeatures: { jsx: true } },
@@ -1441,9 +2578,9 @@ describe("Angular templates", () => {
       )
     }
 
-    it("warns once per workspace, in a project of any framework", () => {
-      scriptIn("entryless-workspace", "packages/a/src/a.tsx")
-      scriptIn("entryless-workspace", "packages/b/src/b.tsx")
+    it("warns once per workspace, from an Angular script", () => {
+      scriptIn("entryless-workspace", "packages/a/src/a.ts")
+      scriptIn("entryless-workspace", "packages/b/src/b.ts")
       const where = path.relative(
         process.cwd(),
         path.join(FIXTURES, "entryless-workspace/packages/a")
@@ -1453,9 +2590,24 @@ describe("Angular templates", () => {
       ])
     })
 
+    // Upstream says nothing there, and neither does this.
+    it("does not warn from a React, Vue or Svelte file", () => {
+      scriptIn("entryless-workspace", "packages/a/src/a.tsx", REACT)
+      scriptIn("entryless-workspace", "packages/b/src/b.tsx", REACT)
+      const rules = { "shadcn/no-unknown-classes": "error" }
+      const sfc = path.join(FIXTURES, "entryless-workspace/packages/a/src")
+      lintSfc(
+        `<template><div class="flex p-4"></div></template>`,
+        path.join(sfc, "A.vue"),
+        rules
+      )
+      lintSfc(`<div class="flex p-4"></div>`, path.join(sfc, "A.svelte"), rules)
+      expect(warnings).toEqual([])
+    })
+
     it("does not warn in a Tailwind v3 project, which has no CSS entry to find", () => {
-      scriptIn("tailwind3-css", "src/app.tsx")
-      scriptIn("tailwind3-installed", "src/app.tsx")
+      scriptIn("tailwind3-css", "src/app.ts")
+      scriptIn("tailwind3-installed", "src/app.ts")
       expect(warnings).toEqual([])
     })
   })
@@ -1506,6 +2658,145 @@ describe("Angular templates", () => {
           "bt",
         ])
       ).toEqual(["btn-sm", "a-red", "a"])
+    })
+
+    // An import this cannot read may declare any class, as an unreadable
+    // selector may.
+    describe("its imports", () => {
+      let dir = ""
+      beforeEach(() => {
+        dir = fs.mkdtempSync(path.join(os.tmpdir(), "shadcn-ng-imports-"))
+      })
+      afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
+      const read = (css: string) =>
+        ownClassesOfCss(css, path.join(dir, "a.scss"))
+
+      it("reads nothing from Sass's own modules or a stylesheet a URL names", () => {
+        const own = read(
+          `@use "sass:math"; @import "https://fonts.test/a.css"; @import url("//cdn.test/b.css"); .a { }`
+        )
+        expect(own.unread).toBe(null)
+        expect(["a", "b"].filter((name) => own.has(name))).toEqual(["a"])
+      })
+
+      it("settles everything past an import it cannot resolve", () => {
+        for (const [css, reason] of [
+          [
+            `@import "~pkg/theme"; .a { }`,
+            'the import "~pkg/theme" uses `~`, which is not resolved',
+          ],
+          [
+            `@use "./missing"; .a { }`,
+            'the import "./missing" does not resolve to a stylesheet',
+          ],
+          [
+            `@use "no-such-package/x"; .a { }`,
+            'the import "no-such-package/x" does not resolve to a stylesheet',
+          ],
+        ]) {
+          const own = read(css)
+          expect(own.has("anything")).toBe(true)
+          expect(own.unread).toEqual({
+            reason,
+            where: path.join(dir, "a.scss"),
+          })
+        }
+      })
+
+      it("reads a package's stylesheet its exports give under style", () => {
+        const pkg = path.join(dir, "node_modules/animate-kit")
+        fs.mkdirSync(path.join(pkg, "dist"), { recursive: true })
+        fs.writeFileSync(
+          path.join(pkg, "package.json"),
+          JSON.stringify({
+            name: "animate-kit",
+            exports: {
+              ".": { style: "./dist/kit.css", default: "./dist/index.js" },
+            },
+          })
+        )
+        fs.writeFileSync(path.join(pkg, "dist/kit.css"), ".kit-in { }")
+        fs.writeFileSync(path.join(pkg, "dist/index.js"), "export {}")
+        const own = read(`@import "animate-kit"; .a { }`)
+        expect(own.unread).toBe(null)
+        expect(["a", "kit-in", "b"].filter((name) => own.has(name))).toEqual([
+          "a",
+          "kit-in",
+        ])
+      })
+
+      // `@use "x" with ($font: "Roboto")`: the strings after the URL are
+      // values, not imports.
+      it("reads only the URL an @use, @forward or @import names", () => {
+        fs.writeFileSync(path.join(dir, "_vars.scss"), `.from-vars { }`)
+        fs.writeFileSync(path.join(dir, "_list.scss"), `.from-list { }`)
+        fs.writeFileSync(path.join(dir, "one.css"), `.from-one { }`)
+        fs.writeFileSync(path.join(dir, "two.css"), `.from-two { }`)
+        const own = read(
+          [
+            `@use "./vars" with ($font: "Roboto", $alt: 'Arial');`,
+            `@use "vars" as v;`,
+            `@forward "list" hide reset, $gap;`,
+            `@forward "list" show "x";`,
+            `@import "one.css", url(two.css) screen;`,
+            `.a { content: "@import 'nope'"; }`,
+          ].join("\n")
+        )
+        expect(own.unread).toBe(null)
+        expect(
+          ["from-vars", "from-list", "from-one", "from-two", "a", "b"].filter(
+            (name) => own.has(name)
+          )
+        ).toEqual(["from-vars", "from-list", "from-one", "from-two", "a"])
+      })
+
+      it("reads an import written without quotes or a closing semicolon", () => {
+        fs.writeFileSync(path.join(dir, "bare.css"), `.from-bare { }`)
+        fs.writeFileSync(path.join(dir, "_last.scss"), `.from-last { }`)
+        fs.writeFileSync(path.join(dir, "_inner.scss"), `.from-inner { }`)
+        const own = read(
+          `@import url(bare.css);\n.x { @import "inner" }\n.y { }\n@import "last"`
+        )
+        expect(own.unread).toBe(null)
+        expect(
+          ["from-bare", "from-inner", "from-last", "x", "y"].filter((name) =>
+            own.has(name)
+          )
+        ).toEqual(["from-bare", "from-inner", "from-last", "x", "y"])
+      })
+
+      it("leaves a comment marker inside a string alone", () => {
+        const own = read(
+          `.a::after { content: " // not a comment"; }\n.b { }\n.c::before { content: "/* nor this */"; }\n.d { }`
+        )
+        expect(["a", "b", "c", "d"].filter((name) => own.has(name))).toEqual([
+          "a",
+          "b",
+          "c",
+          "d",
+        ])
+      })
+
+      it("settles everything past as many stylesheets as it reads", () => {
+        const names = Array.from({ length: 70 }, (_, i) => `p${i}`)
+        for (const name of names) {
+          fs.writeFileSync(path.join(dir, `_${name}.scss`), `.${name} { }`)
+        }
+        const own = read(names.map((name) => `@use "${name}";`).join("\n"))
+        expect(own.has("anything")).toBe(true)
+        expect(own.unread?.reason).toBe(
+          "it imports more than 64 stylesheets, and the rest are not read"
+        )
+        const few = read(
+          names
+            .slice(0, 10)
+            .map((name) => `@use "${name}";`)
+            .join("\n")
+        )
+        expect(few.unread).toBe(null)
+        expect(few.has("p9")).toBe(true)
+        expect(few.has("p10")).toBe(false)
+      })
     })
 
     it("settles everything when a selector cannot be read", () => {

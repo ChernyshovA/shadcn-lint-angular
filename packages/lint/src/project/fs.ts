@@ -116,3 +116,8 @@ export function findUp(fromDir: string, name: string): string | null {
 export function resetFsMemo() {
   memo.clear()
 }
+
+// How many answers the memo holds, for tests.
+export function memoSizeForTests() {
+  return memo.size
+}

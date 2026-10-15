@@ -72,9 +72,12 @@ const HOST_KEYS = new Set([
   "styleAttribute",
 ])
 
-// A binding of the element's class: `[class]` or `[class.active]`, as
-// the host of a directive the project declares counts.
-const CLASS_BINDING = /^class(?:\.|$)/
+// A binding of what lands on the element's class, as a template's
+// element takes it (ON_ELEMENT in angular-restyle.ts): `[class]`,
+// `[class.active]`, `[attr.class]`, or `[className]`, the property the
+// attribute reflects. The host of a directive the project declares
+// counts the same.
+export const CLASS_BINDING = /^(?:class(?:\.|$)|attr\.class$|className$)/
 
 const MAX_DEPTH = 16
 
@@ -460,28 +463,44 @@ function resolveScript(spec: string, fromFile: string): string | null {
 
 type JsValue = { file: string; cls: JsClass }
 
-// What a module exports under `name`, followed through its re-exports.
+// Whether a walk through modules has been at a file for a name before:
+// `export *` that loop back, or meet again, give nothing the first visit
+// did not.
+function visited(seen: Set<string>, kind: string, file: string, name: string) {
+  const key = `${kind}\u0000${file}\u0000${name}`
+  if (seen.has(key)) return true
+  seen.add(key)
+  return false
+}
+
+// What a module exports under `name`, followed through its re-exports,
+// each module once for a name.
 function scriptExport(
   file: string,
   name: string,
   deps: Set<string>,
-  depth = 0
+  depth = 0,
+  seen = new Set<string>()
 ): JsValue | null {
-  if (depth > MAX_DEPTH) return null
+  if (depth > MAX_DEPTH || visited(seen, "export", file, name)) return null
   deps.add(file)
   const read = jsFile(file)
   if (!read) return null
   const binding = read.exports.get(name)
   if (binding) {
     if (binding.spec === null)
-      return scriptLocal(file, binding.name, deps, depth + 1)
+      return scriptLocal(file, binding.name, deps, depth + 1, seen)
     if (binding.name === "*") return null
     const target = resolveScript(binding.spec, file)
-    return target ? scriptExport(target, binding.name, deps, depth + 1) : null
+    return target
+      ? scriptExport(target, binding.name, deps, depth + 1, seen)
+      : null
   }
   for (const spec of read.stars) {
     const target = resolveScript(spec, file)
-    const found = target ? scriptExport(target, name, deps, depth + 1) : null
+    const found = target
+      ? scriptExport(target, name, deps, depth + 1, seen)
+      : null
     if (found) return found
   }
   return null
@@ -493,9 +512,10 @@ function scriptLocal(
   file: string,
   name: string,
   deps: Set<string>,
-  depth = 0
+  depth = 0,
+  seen = new Set<string>()
 ): JsValue | null {
-  if (depth > MAX_DEPTH) return null
+  if (depth > MAX_DEPTH || visited(seen, "local", file, name)) return null
   deps.add(file)
   const read = jsFile(file)
   if (!read) return null
@@ -504,7 +524,9 @@ function scriptLocal(
   const imported = read.imports.get(name)
   if (!imported || imported.name === "*") return null
   const target = resolveScript(imported.spec, file)
-  return target ? scriptExport(target, imported.name, deps, depth + 1) : null
+  return target
+    ? scriptExport(target, imported.name, deps, depth + 1, seen)
+    : null
 }
 
 function scriptRef(file: string, ref: Ref, deps: Set<string>) {
@@ -527,21 +549,32 @@ function either(values: (boolean | null)[]) {
 // the directives it hosts, and when it inherits, those of each class up
 // its chain, as ɵɵInheritDefinitionFeature walks the prototype chain past
 // classes Angular does not know and takes each declared one's host
-// bindings and, through ngInherit, its host directives.
-function stylesOf(found: JsValue, deps: Set<string>, depth: number) {
+// bindings and, through ngInherit, its host directives. Each class is
+// read once, however many ways reach it: what it gives is in the answer
+// already.
+function stylesOf(
+  found: JsValue,
+  deps: Set<string>,
+  depth: number,
+  seen = new Set<JsClass>()
+) {
   if (depth > MAX_DEPTH) return null
   const own = found.cls.declaration
   if (!own) return null
+  if (seen.has(found.cls)) return false
   const values: (boolean | null)[] = []
   let at: JsValue | null = found
   for (let up = 0; at; up++) {
+    // A chain that loops back adds nothing more.
+    if (up > 0 && seen.has(at.cls)) break
+    seen.add(at.cls)
     const { declaration, base } = at.cls
     if (declaration) {
       values.push(declaration.classes)
       if (!declaration.hostDirectives) values.push(null)
       for (const ref of declaration.hostDirectives ?? []) {
         const host = scriptRef(at.file, ref, deps)
-        values.push(host ? stylesOf(host, deps, depth + 1) : null)
+        values.push(host ? stylesOf(host, deps, depth + 1, seen) : null)
       }
     }
     if (values.includes(true) || !own.inherits || !base) break
@@ -564,14 +597,15 @@ function spaced(selector: string | null) {
 // Whether a library's directive or component puts a class on its
 // element, read from the module of the entry point it was reached
 // through, where its declaration is the one with its name and the
-// selector its .d.ts gives. Null when that, or what it hosts or
-// inherits, cannot be read. `deps` collects the modules read.
+// selector its .d.ts gives. Null when that, the selector, or what it
+// hosts or inherits, cannot be read. `deps` collects the modules read.
 export function compiledStyles(
   owner: Owner,
   name: string,
-  selector: string | null,
+  selector: string | null | undefined,
   deps: Set<string>
 ): boolean | null {
+  if (selector === undefined) return null
   const entry = resolveScript(owner.spec, owner.from)
   const found = entry ? scriptExport(entry, owner.name ?? name, deps) : null
   const declaration = found?.cls.declaration

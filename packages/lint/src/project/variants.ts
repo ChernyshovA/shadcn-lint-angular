@@ -5,6 +5,7 @@
 import * as fs from "node:fs"
 import * as path from "node:path"
 
+import { importsAngular } from "../sites/readers/angular-code"
 import { walk } from "./ast"
 import { barrelOf } from "./components"
 import { mtimeOf } from "./fs"
@@ -37,18 +38,37 @@ function keyName(node: any) {
   return null
 }
 
-function axesOf(config: any) {
+// In an Angular file an object may be written with its type on it,
+// `<Record<Variant, string>>{ … }`, `{ … } as …`, `{ … } satisfies …`.
+function uncast(node: any) {
+  let value = node
+  while (
+    value?.type === "TSAsExpression" ||
+    value?.type === "TSSatisfiesExpression" ||
+    value?.type === "TSTypeAssertion" ||
+    value?.type === "ParenthesizedExpression"
+  ) {
+    value = value.expression
+  }
+  return value
+}
+
+function axesOf(config: any, angular = false) {
+  const read = angular ? uncast : (node: any) => node
   const axes: Record<string, string[]> = {}
+  config = read(config)
   if (config?.type !== "ObjectExpression") return axes
   const variants = config.properties.find(
     (p: any) => p.type === "Property" && keyName(p.key) === "variants"
   )
-  if (variants?.value?.type !== "ObjectExpression") return axes
-  for (const axis of variants.value.properties) {
+  const axesObject = read(variants?.value)
+  if (axesObject?.type !== "ObjectExpression") return axes
+  for (const axis of axesObject.properties) {
     if (axis.type !== "Property") continue
     const axisName = keyName(axis.key)
-    if (!axisName || axis.value?.type !== "ObjectExpression") continue
-    axes[axisName] = axis.value.properties
+    const values = read(axis.value)
+    if (!axisName || values?.type !== "ObjectExpression") continue
+    axes[axisName] = values.properties
       .filter((p: any) => p.type === "Property")
       .map((p: any) => keyName(p.key))
       .filter((k: any): k is string => typeof k === "string")
@@ -270,13 +290,14 @@ function readVariants(source: string, file: string) {
     return { definitions, uses }
   }
   const declared = declarationsIn(ast)
+  const angular = importsAngular(ast)
   const scopes = new Map<string, any>()
   const types = new Map<string, any>()
   walk(ast, (node, parent) => {
-    // A class too: an Angular directive's cva is used in its body.
+    // In an Angular file a class too: a directive's cva is used in its body.
     if (
       (node.type === "FunctionDeclaration" ||
-        node.type === "ClassDeclaration" ||
+        (angular && node.type === "ClassDeclaration") ||
         node.type === "VariableDeclarator" ||
         node.type === "TSTypeAliasDeclaration" ||
         node.type === "TSInterfaceDeclaration") &&
@@ -294,7 +315,7 @@ function readVariants(source: string, file: string) {
         node.callee.name === "tv" && first?.type === "ObjectExpression"
           ? first
           : second
-      const axes = axesOf(config)
+      const axes = axesOf(config, angular)
       if (!Object.keys(axes).length) return
       const name =
         parent?.type === "VariableDeclarator" &&

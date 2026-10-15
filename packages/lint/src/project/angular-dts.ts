@@ -38,7 +38,9 @@ export type Owner = { spec: string; from: string; name: string | null }
 
 export type DtsDirective = {
   component: boolean
-  selector: string | null
+  // Null for `never`, no selector; undefined for a type that is no
+  // string, which this cannot read.
+  selector: string | null | undefined
   // The public names of its own inputs and of those its host directives
   // expose on it.
   inputs: string[]
@@ -54,6 +56,9 @@ export type DtsModule = {
 
 export type DtsClass = {
   directive: DtsDirective | null
+  // Whether it declares a component or a directive at all, read or not:
+  // one that does not, a helper or an @Injectable, has no host.
+  declared: boolean
   module: DtsModule | null
   // A pipe, which a module may export too and no element matches.
   pipe: boolean
@@ -208,7 +213,10 @@ function declarationOf(
     kind: "directive",
     directive: {
       component: field === "ɵcmp",
-      selector: readStringType(args[1]),
+      selector:
+        args[1]?.type === "TSNeverKeyword"
+          ? null
+          : (readStringType(args[1]) ?? undefined),
       inputs: [
         ...readInputsType(args[3]),
         ...(args.length > 8 ? hostInputsOf(args[8]) : []),
@@ -252,12 +260,16 @@ function extract(program: any) {
     if (node?.type === "ClassDeclaration" && node.id?.name) {
       const cls: DtsClass = {
         directive: null,
+        declared: false,
         module: null,
         pipe: false,
         base: superOf(node),
       }
       for (const member of node.body?.body ?? []) {
         if (member?.static && keyOf(member) === "ɵpipe") cls.pipe = true
+        if (member?.static && /^ɵ(cmp|dir)$/.test(keyOf(member) ?? "")) {
+          cls.declared = true
+        }
         const declaration = declarationOf(member)
         if (!declaration) continue
         read++
@@ -565,24 +577,35 @@ function ownerPast(
   return isBare(spec) ? { spec, from: file, name } : owner
 }
 
+// Whether a walk through declaration files has been at a file for a
+// name before: `export *` that loop back, or meet again, give nothing
+// the first visit did not.
+function visited(seen: Set<string>, kind: string, file: string, name: string) {
+  const key = `${kind}\u0000${file}\u0000${name}`
+  if (seen.has(key)) return true
+  seen.add(key)
+  return false
+}
+
 // What a declaration file exports under `name`, followed through its
-// re-exports. `deps` collects the files read; `owner` is the entry point
-// the file was reached through.
+// re-exports, each file once for a name. `deps` collects the files read;
+// `owner` is the entry point the file was reached through.
 export function dtsExport(
   file: string,
   name: string,
   deps: Set<string>,
   owner: Owner | null = null,
-  depth = 0
+  depth = 0,
+  seen = new Set<string>()
 ): DtsValue | null {
-  if (depth > MAX_DEPTH) return null
+  if (depth > MAX_DEPTH || visited(seen, "export", file, name)) return null
   deps.add(file)
   const read = dtsFile(file)
   if (!read) return null
   const binding = read.exports.get(name)
   if (binding) {
     if (binding.spec === null)
-      return dtsLocal(file, binding.name, deps, owner, depth + 1)
+      return dtsLocal(file, binding.name, deps, owner, depth + 1, seen)
     if (binding.name === "*") return null
     const target = resolveDts(binding.spec, file)
     return target
@@ -591,7 +614,8 @@ export function dtsExport(
           binding.name,
           deps,
           ownerPast(binding.spec, file, binding.name, owner),
-          depth + 1
+          depth + 1,
+          seen
         )
       : null
   }
@@ -603,7 +627,8 @@ export function dtsExport(
           name,
           deps,
           ownerPast(spec, file, name, owner),
-          depth + 1
+          depth + 1,
+          seen
         )
       : null
     if (found) return found
@@ -618,9 +643,10 @@ export function dtsLocal(
   name: string,
   deps: Set<string>,
   owner: Owner | null = null,
-  depth = 0
+  depth = 0,
+  seen = new Set<string>()
 ): DtsValue | null {
-  if (depth > MAX_DEPTH) return null
+  if (depth > MAX_DEPTH || visited(seen, "local", file, name)) return null
   deps.add(file)
   const read = dtsFile(file)
   if (!read) return null
@@ -637,7 +663,8 @@ export function dtsLocal(
         imported.name,
         deps,
         ownerPast(imported.spec, file, imported.name, owner),
-        depth + 1
+        depth + 1,
+        seen
       )
     : null
 }

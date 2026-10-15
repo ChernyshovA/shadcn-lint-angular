@@ -75,9 +75,13 @@ function literalOf(attribute: any) {
   const quote = text[start.offset - 1]
   const quoted = (quote === '"' || quote === "'") && text[end.offset] === quote
   const pad = quoted ? 1 : 0
+  const value = withoutInterpolations(attribute.value)
   literal = {
     type: "AngularLiteral",
-    value: withoutInterpolations(attribute.value),
+    value,
+    // Bindings blanked out of the value: a suggestion looks for the class
+    // past them.
+    masked: value !== attribute.value || attribute.masked === true,
     range: [start.offset - pad, end.offset + pad],
     loc: {
       start: { line: start.line + 1, column: start.col - pad },
@@ -209,11 +213,13 @@ function keyOf(attribute: any): string {
 }
 
 // What a binding sets, under the attribute name a static one would have:
-// `[ngClass]` and `[class.x]` set classes, `[ngStyle]` and `[style.x]`
-// a style, `[attr.fill]` the attribute.
+// `[ngClass]`, `[class.x]` and `[className]`, the property the class
+// attribute reflects, set classes, as they do in `host`; `[ngStyle]` and
+// `[style.x]` a style, `[attr.fill]` the attribute.
 function bindingName(attribute: any) {
   const key = keyOf(attribute)
-  if (key.startsWith("class.") || key === "ngClass") return "class"
+  if (key.startsWith("class.") || key === "ngClass" || key === "className")
+    return "class"
   if (key.startsWith("style.") || key === "ngStyle") return "style"
   if (key.startsWith("attr.")) return key.slice(5)
   return typeof attribute?.name === "string" ? attribute.name : ""
@@ -258,7 +264,12 @@ function bindingValue(attribute: any) {
         attribute
       )
     } else if (key.startsWith("style.") && typeof start === "number") {
+      // `[style.]` names no property, and sets none.
       const property = key.slice("style.".length).split(".")[0]
+      if (!property) {
+        values.set(attribute, null)
+        return null
+      }
       const from = start + "style.".length
       value = styleObjectNode(
         property,
@@ -328,9 +339,10 @@ const selectors = new WeakMap<object, ElementSelector>()
 
 // What Angular matches a directive's selector against: the tag, each
 // static attribute (the parser keeps i18n's out), each property or
-// two-way binding and each event, by the names the template writes.
+// two-way binding and each event, by the names the template writes. An
+// element in an ICU is matched by none.
 export function selectorOf(element: any): ElementSelector | null {
-  if (element?.type !== "Element") return null
+  if (element?.type !== "Element" || element.icu) return null
   let selector = selectors.get(element)
   if (selector) return selector
   const written: { at: number; name: string; value: string; own: boolean }[] =
@@ -390,8 +402,174 @@ export function contractNamesOf(element: any) {
   return [...names]
 }
 
+// Where an interpolation that starts at `from` ends, as the compiler's
+// expression parser finds it: at the first `}}` outside a string, or, past
+// a `//` comment, at the next `}}`. -1 for one that never ends, which is
+// text.
+function interpolationEnd(value: string, from: number) {
+  let quote: string | null = null
+  let escapes = 0
+  for (let i = from; i < value.length; i++) {
+    const c = value[i]
+    if (
+      (c === "'" || c === '"' || c === "`") &&
+      (quote === null || quote === c) &&
+      escapes % 2 === 0
+    ) {
+      quote = quote === null ? c : null
+    } else if (quote === null) {
+      if (value.startsWith("}}", i)) return i
+      if (value.startsWith("//", i)) return value.indexOf("}}", i)
+    }
+    escapes = c === "\\" ? escapes + 1 : 0
+  }
+  return -1
+}
+
+// `{{ x }}` in an attribute of an element in an ICU, with the token
+// glued to it, blanked to spaces of the same length: what the i18n
+// runtime binds is not a class written out.
+function withoutBindings(value: string) {
+  // UTF-16 units, as the offsets count them.
+  const out = value.split("")
+  for (let at = value.indexOf("{{"); at !== -1;) {
+    const end = interpolationEnd(value, at + 2)
+    if (end === -1) break
+    let start = at
+    while (start > 0 && /\S/.test(value[start - 1])) start--
+    let stop = end + 2
+    while (stop < value.length && /\S/.test(value[stop])) stop++
+    out.fill(" ", start, stop)
+    at = value.indexOf("{{", end + 2)
+  }
+  return out.join("")
+}
+
+const tagSet = (tags: string) => new Set(tags.split(","))
+
+// The elements and attributes Angular's i18n runtime creates in an ICU's
+// case (walkIcuTree in @angular/core), its sanitizer's VALID_ELEMENTS and
+// VALID_ATTRS, the same from Angular 19 to 22. It drops another element
+// with all it holds, and another attribute: an <svg>, a custom element,
+// `style`, `ngClass`, a binding, an event or a reference.
+const ICU_ELEMENTS = tagSet(
+  "a,abbr,acronym,address,area,article,aside,audio,b,bdi,bdo,big,blockquote,br,caption,center,cite,code,col,colgroup,dd,del,details,dfn,dialog,dir,div,dl,dt,em,figcaption,figure,font,footer,h1,h2,h3,h4,h5,h6,header,hgroup,hr,i,img,ins,kbd,label,li,main,map,mark,menu,nav,ol,p,picture,pre,q,rp,rt,ruby,s,samp,section,small,source,span,strike,strong,sub,summary,sup,table,tbody,td,tfoot,th,thead,time,tr,track,tt,u,ul,var,video,wbr"
+)
+// The runtime parses a case as the body of a document (DOMParser,
+// getInertBodyElement in @angular/core), where these start tags outside
+// a <table> are dropped and what they hold is kept.
+const TABLE_PARTS = tagSet("caption,col,colgroup,tbody,td,tfoot,th,thead,tr")
+
+const ICU_ATTRIBUTES = tagSet(
+  "abbr,accesskey,align,alt,aria-activedescendant,aria-atomic,aria-autocomplete,aria-busy,aria-checked,aria-colcount,aria-colindex,aria-colspan,aria-controls,aria-current,aria-describedby,aria-details,aria-disabled,aria-dropeffect,aria-errormessage,aria-expanded,aria-flowto,aria-grabbed,aria-haspopup,aria-hidden,aria-invalid,aria-keyshortcuts,aria-label,aria-labelledby,aria-level,aria-live,aria-modal,aria-multiline,aria-multiselectable,aria-orientation,aria-owns,aria-placeholder,aria-posinset,aria-pressed,aria-readonly,aria-relevant,aria-required,aria-roledescription,aria-rowcount,aria-rowindex,aria-rowspan,aria-selected,aria-setsize,aria-sort,aria-valuemax,aria-valuemin,aria-valuenow,aria-valuetext,autoplay,axis,background,bgcolor,border,cellpadding,cellspacing,cite,class,clear,color,cols,colspan,compact,controls,coords,datetime,default,dir,download,face,headers,height,hidden,href,hreflang,hspace,ismap,itemprop,itemscope,itemtype,kind,label,lang,language,longdesc,loop,media,muted,nohref,nowrap,open,poster,preload,rel,rev,role,rows,rowspan,rules,scope,scrolling,shape,size,sizes,span,src,srclang,srcset,start,summary,tabindex,target,title,translate,type,usemap,valign,value,vspace,width,xlink:href"
+)
+
+const held = new WeakMap<object, any[]>()
+
+// Where a node of the compiler's HTML AST sits, as ESLint places the
+// parser's own: lines from 1, columns and offsets from 0.
+function placed(span: any) {
+  return {
+    range: [span.start.offset, span.end.offset],
+    loc: {
+      start: { line: span.start.line + 1, column: span.start.col },
+      end: { line: span.end.line + 1, column: span.end.col },
+    },
+  }
+}
+
+// The attributes of the elements in an ICU's cases, `{n, plural, =0
+// {<span class="…">}}`, nested ICUs too. The parser keeps those elements
+// only in the i18n message, as tags with their attributes as text, so
+// they are read again from the template with the compiler's own HTML
+// parser, over the ICU's span, in the file's own offsets. The i18n
+// runtime creates them as plain elements with static attributes, those
+// of the elements and attributes it knows, named as the browser parses
+// them, in lowercase.
+function icuAttributes(icu: any): any[] {
+  let out = held.get(icu)
+  if (out) return out
+  out = []
+  held.set(icu, out)
+  const span = icu?.sourceSpan
+  const file = span?.start?.file
+  if (typeof file?.content !== "string") return out
+  const angular = angularCompiler(file.url ?? "")
+  if (!angular?.HtmlParser) return out
+  let parsed: any
+  try {
+    parsed = new angular.HtmlParser().parse(file.content, file.url ?? "", {
+      tokenizeExpansionForms: true,
+      tokenizeBlocks: true,
+      tokenizeLet: true,
+      preserveLineEndings: true,
+      range: {
+        startPos: span.start.offset,
+        startLine: span.start.line,
+        startCol: span.start.col,
+        endPos: span.end.offset,
+      },
+    })
+  } catch {
+    return out
+  }
+  if (parsed?.errors?.length) return out
+  const attributes = out
+  const visit = (nodes: any[], parent: any, table = false) => {
+    for (const node of nodes ?? []) {
+      if (Array.isArray(node?.cases)) {
+        for (const branch of node.cases) visit(branch.expression, parent)
+      } else if (typeof node?.name === "string" && Array.isArray(node.attrs)) {
+        const tag = node.name.toLowerCase()
+        if (!ICU_ELEMENTS.has(tag)) continue
+        if (!table && TABLE_PARTS.has(tag)) {
+          visit(node.children, parent, table)
+          continue
+        }
+        const element = {
+          type: "Element",
+          icu: true,
+          name: node.name,
+          attributes: [] as any[],
+          inputs: [],
+          outputs: [],
+          sourceSpan: node.sourceSpan,
+          ...placed(node.sourceSpan),
+          parent,
+        }
+        for (const attr of node.attrs) {
+          const name = String(attr?.name ?? "").toLowerCase()
+          if (!ICU_ATTRIBUTES.has(name)) continue
+          const written = attr.value ?? ""
+          const value = withoutBindings(written)
+          const attribute = {
+            type: "TextAttribute",
+            name,
+            value,
+            masked: value !== written,
+            sourceSpan: attr.sourceSpan,
+            keySpan: attr.keySpan,
+            valueSpan: attr.valueSpan,
+            ...placed(attr.sourceSpan),
+            parent: element,
+          }
+          element.attributes.push(attribute)
+          attributes.push(attribute)
+        }
+        visit(node.children, element, table || tag === "table")
+      } else if (Array.isArray(node?.children)) {
+        // A block: `@if` in a case.
+        visit(node.children, parent, table)
+      }
+    }
+  }
+  visit(parsed?.rootNodes, icu)
+  return out
+}
+
 export const angularReader: TemplateReader = {
   attributes: ["TextAttribute", "BoundAttribute"],
+  heldAttributes: { Icu: icuAttributes },
   revisited: ["BoundAttribute"],
   // The router adds these classes while the link is active.
   classAttributes: ["routerLinkActive"],
