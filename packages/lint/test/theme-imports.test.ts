@@ -111,6 +111,20 @@ describe("no-raw-colors with a theme from a package", () => {
     })
   })
 
+  // The kit's scales come from the same read as its colors.
+  test("with themeImports, the kit's scales are not colors", () => {
+    createTester().run("no-raw-colors", noRawColors as any, {
+      valid: [
+        {
+          filename: PAGE,
+          settings,
+          code: `export const A = () => <div className="text-kicker shadow-lift" />`,
+        },
+      ],
+      invalid: [],
+    })
+  })
+
   test("the setting applies to the project whose rules read it", () => {
     createTester().run("no-raw-colors", noRawColors as any, {
       valid: [

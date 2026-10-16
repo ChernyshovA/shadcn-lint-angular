@@ -4,6 +4,7 @@
 
 import * as fs from "node:fs"
 import * as path from "node:path"
+import type { ConfigExtension } from "cn/compiler"
 
 import { normalizeClass, OPACITY_MODIFIER } from "../grammar/classes"
 import { parseColor, type Lab } from "../grammar/colors"
@@ -12,6 +13,7 @@ import { FONT_SIZES, RADII } from "../grammar/tailwind-theme"
 import { projectFor } from "./components-json"
 import { isFile, mtimeOf, TTL } from "./fs"
 import { packageRoot, resolveFile } from "./resolve"
+import { themeScalesOf } from "./theme-scales"
 import { warnOnce } from "./warn"
 
 export type ScaleKind = "radius" | "text"
@@ -56,6 +58,7 @@ type ThemeRead = {
   missingImports: { spec: string; fromDir: string; rootDir: string }[]
   colors?: Map<string, Lab>
   scales?: Record<ScaleKind, Map<string, number>>
+  themeScales?: ConfigExtension
   spacing?: number | null
   vocabulary?: ThemeVocabulary
 }
@@ -709,6 +712,18 @@ export function scaleFor(fromFile: string, kind: ScaleKind) {
   const cssFile = themeFileFor(fromFile)
   if (!cssFile) return DEFAULT_SCALES[kind]
   return scaleOf(themeOf(fromFile, cssFile), kind)
+}
+
+// The scales the theme declares, as a cn config extension. One object
+// per theme read, so callers can memo against its identity. Null when the
+// project has no theme to read.
+export function themeScalesFor(fromFile: string) {
+  const cssFile = themeFileFor(fromFile)
+  if (!cssFile) {
+    return null
+  }
+  const read = themeOf(fromFile, cssFile)
+  return (read.themeScales ??= themeScalesOf(read.declarations))
 }
 
 // Null when the project has no theme to read.

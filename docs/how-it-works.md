@@ -168,7 +168,8 @@ shape class, `--text-display` makes `text-display` typography, and
 `--spacing-gutter` makes `p-gutter` spacing. A `--radius-*: initial`
 reset replaces the default names with the declared ones, so `rounded-lg`
 is unclassified until the theme declares it again. Only `@theme` blocks
-count, and relative `@import`s are followed.
+count. Scales come from the same stylesheets as your tokens: relative
+and aliased `@import`s, and packages that `themeImports` names.
 
 A class your CSS declares with `@utility` is classified by what its body
 sets, the way an arbitrary property is: `@utility heading-2xs { font-size:

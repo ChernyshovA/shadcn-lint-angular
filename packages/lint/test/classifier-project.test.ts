@@ -189,16 +189,50 @@ describe("theme scales refresh and fail safe", () => {
     expect(classifierFor(page)).toBe(classifierFor(page))
   })
 
-  test("an unreadable import warns once and leaves the grammar alone", () => {
+  test("a missing import leaves the scales declared beside it", () => {
     const { page } = createProject(
       `@import "./missing.css";\n@theme { --radius-card: 8px; }`
     )
-    expect(groupOf("rounded-card", page)).toBeNull()
+    expect(groupOf("rounded-card", page)).toBe("rounded")
     expect(groupOf("rounded-lg", page)).toBe("rounded")
-    expect(warnings).toHaveLength(1)
-    expect(warnings[0]).toContain("missing.css")
-    groupOf("rounded-card", path.join(path.dirname(page), "other.tsx"))
-    expect(warnings).toHaveLength(1)
+  })
+
+  test("a declaration after a nested @keyframes counts", () => {
+    const { page } = createProject(`@theme {
+  --animate-wiggle: wiggle 1s infinite;
+  @keyframes wiggle {
+    from { rotate: -3deg; }
+    to { rotate: 3deg; }
+  }
+  --text-kicker: 11px;
+  --radius-card: 8px;
+}`)
+    expect(groupOf("text-kicker", page)).toBe("font-size")
+    expect(groupOf("rounded-card", page)).toBe("rounded")
+  })
+
+  test("a stylesheet imported through a path alias counts", () => {
+    const { write, page } = createProject(`@import "@/styles/scales.css";`)
+    write(
+      "tsconfig.json",
+      JSON.stringify({ compilerOptions: { paths: { "@/*": ["./*"] } } })
+    )
+    write(
+      "styles/scales.css",
+      "@theme { --text-eyebrow: 11px; --shadow-halo: 0 0 4px #000; --radius-pill: 999px; }"
+    )
+    expect(groupOf("text-eyebrow", page)).toBe("font-size")
+    expect(groupOf("shadow-halo", page)).toBe("shadow")
+    expect(groupOf("rounded-pill", page)).toBe("rounded")
+  })
+
+  test("a reset drops the names declared before it", () => {
+    const { page } = createProject(
+      "@theme { --radius-card: 8px; --radius-*: initial; --radius-fresh: 4px; }"
+    )
+    expect(groupOf("rounded-card", page)).toBeNull()
+    expect(groupOf("rounded-lg", page)).toBeNull()
+    expect(groupOf("rounded-fresh", page)).toBe("rounded")
   })
 })
 
