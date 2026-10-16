@@ -274,6 +274,37 @@ describe("tailwind oracle", () => {
     expect(answer.unknown.map((u) => u.token)).toEqual(["rounded-pil"])
   })
 
+  // shadcn-ui/lint#108, through the alias fallback: a package without a
+  // stylesheet is not read as one, as Tailwind would not.
+  test("does not read a script-only package a theme imports as CSS", async () => {
+    resetOracle()
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "shadcn-lint-"))
+    temporary.push(root)
+    const write = (file: string, content: string) => {
+      fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true })
+      fs.writeFileSync(path.join(root, file), content)
+    }
+    write("package.json", `{ "private": true }\n`)
+    write(
+      "node_modules/scripts/package.json",
+      JSON.stringify({
+        name: "scripts",
+        exports: { ".": { import: "./index.js" } },
+      })
+    )
+    write("node_modules/scripts/index.js", `export {}\n`)
+    write("src/index.css", `@import "tailwindcss";\n@import "scripts";\n`)
+    fs.symlinkSync(
+      path.dirname(
+        createRequire(import.meta.url).resolve("tailwindcss/package.json")
+      ),
+      path.join(root, "node_modules/tailwindcss"),
+      "dir"
+    )
+    const answer = await query(path.join(root, "src/index.css"), ["flex"])
+    expect(answer.ok).toBe(false)
+  })
+
   test("a theme that cannot be read is unavailable, not wrong", async () => {
     const answer = await query("/nonexistent/app/globals.css", ["flex"])
     expect(answer.ok).toBe(false)

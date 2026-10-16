@@ -317,9 +317,13 @@ export function resolveStylesheet(base: string, id: string) {
 function resolveImport(base: string, id: string) {
   return (
     resolveStylesheet(base, id) ??
-    resolveFile(id, base, packageRoot(path.join(base, "index.css")) ?? base, [
-      ".css",
-    ])
+    resolveFile(
+      id,
+      base,
+      packageRoot(path.join(base, "index.css")) ?? base,
+      [".css"],
+      { stylesheet: true }
+    )
   )
 }
 
