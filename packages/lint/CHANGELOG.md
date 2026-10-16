@@ -1,5 +1,9 @@
 # shadcn-lint-angular
 
+## 0.1.1
+
+- Publish the README with the package, so npm shows it. The code is 0.1.0's.
+
 ## 0.1.0
 
 First release: [`@shadcn/lint`](https://github.com/shadcn-ui/lint) with Angular template support, built on its `main` at [`8551d00`](https://github.com/shadcn-ui/lint/commit/8551d008d756fdf7bc02e74ccb3224ee3b140267), after 0.2.1. For the history before, see [its changelog](https://github.com/shadcn-ui/lint/blob/main/packages/lint/CHANGELOG.md).

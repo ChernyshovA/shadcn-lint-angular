@@ -18,6 +18,16 @@ are published by hand:
    git push origin main shadcn-lint-angular@<version>
    ```
 
+`scripts/prepack.mjs` copies the root README into the package when it is
+packed, and `npm publish` reads the README for npm's page before that. To
+publish with npm itself rather than `pnpm run release`, copy it first:
+
+```bash
+cd packages/lint
+node scripts/prepack.mjs
+npm publish
+```
+
 `packages/evals` stays private and is never versioned or published.
 
 ## Syncing with upstream
