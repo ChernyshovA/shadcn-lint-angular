@@ -97,7 +97,7 @@ The settings are `@shadcn/lint`'s, described in [its README](https://github.com/
 
 ## Differences from @shadcn/lint
 
-This release is built on `@shadcn/lint`'s `main` at [`17d381e`](https://github.com/shadcn-ui/lint/commit/17d381e353b07d68a7dfbcc0516a11a6b78aa751), 0.2.1 and the changes since. Files that are not Angular code lint as they do there, apart from:
+This release is built on `@shadcn/lint`'s `main` at [`8551d00`](https://github.com/shadcn-ui/lint/commit/8551d008d756fdf7bc02e74ccb3224ee3b140267), after 0.2.1. Files that are not Angular code lint as they do there, apart from:
 
 - fixes for [shadcn-ui/lint#98](https://github.com/shadcn-ui/lint/issues/98) (hyphenated SVG color attributes), [#108](https://github.com/shadcn-ui/lint/issues/108) (`@import "tailwindcss"` read as JavaScript) and [#111](https://github.com/shadcn-ui/lint/issues/111) (`tsconfig.base.json` paths in Nx), proposed upstream in [#105](https://github.com/shadcn-ui/lint/pull/105), [#113](https://github.com/shadcn-ui/lint/pull/113) and [#114](https://github.com/shadcn-ui/lint/pull/114);
 - two settings that change nothing unless set: `settings.shadcn.entryPoint` and `no-restyle`'s `multipleContracts`;
