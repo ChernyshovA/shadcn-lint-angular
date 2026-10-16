@@ -9,7 +9,10 @@ import { Linter } from "eslint"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { plugin } from "../src/plugin"
-import { ownClassesOfCss } from "../src/project/angular-styles"
+import {
+  angularHostClassesOf,
+  ownClassesOfCss,
+} from "../src/project/angular-styles"
 import { resetFsMemo } from "../src/project/fs"
 import { useParser } from "../src/project/parser"
 import { resetWarnings, setWarningSink } from "../src/project/warn"
@@ -1436,6 +1439,29 @@ describe("Angular templates", () => {
             "list.html"
           )
         ).toEqual(["list-own", "card-header"])
+      })
+
+      it("reads a <style> in the template, as Angular's compiler does", () => {
+        const file = path.join(PROJECT, "src/app/welcome.component.html")
+        expect(
+          unknown(fs.readFileSync(file, "utf8"), "welcome.component.html")
+        ).toEqual(["pill-x", "ghost"])
+        const host = angularHostClassesOf(
+          path.join(PROJECT, "src/app/welcome.component.ts"),
+          "WelcomeComponent"
+        )
+        expect(["compact", "main"].filter((name) => host?.has(name))).toEqual([
+          "compact",
+        ])
+      })
+
+      it("reads a <style> in an inline template", () => {
+        const file = path.join(PROJECT, "src/app/inline-style.ts")
+        expect(
+          lintInline(fs.readFileSync(file, "utf8"), file)
+            .filter((m) => m.ruleId === "shadcn/no-unknown-classes")
+            .map((m) => m.message.split('"')[1])
+        ).toEqual(["inline-not"])
       })
 
       it("stays quiet when the styles are not written out in the decorator", () => {

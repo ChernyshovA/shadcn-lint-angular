@@ -56,7 +56,7 @@ Angular projects lints as `@shadcn/lint` lints it. A dependency on
 select, as it knows the theme's. The component is the one whose
 `@Component` names the template, by `templateUrl` from a `.ts` file in
 the template's directory, or whose `.ts` holds the inline template. Its
-styles are `styleUrl`, `styleUrls` and `styles`; its `host` is judged by
+styles are `styleUrl`, `styleUrls`, `styles` and a `<style>` in the template, as Angular's compiler adds it; its `host` is judged by
 them too.
 
 SCSS and Less nesting is resolved, `&-header` included. `@import`,

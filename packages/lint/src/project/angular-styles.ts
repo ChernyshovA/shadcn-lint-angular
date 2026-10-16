@@ -54,6 +54,8 @@ export type ComponentMeta = {
   inline: boolean
   styleUrls: string[]
   styles: string[]
+  // `template` as written, when it is a string.
+  template: string | null
   // A metadata value that is not written out.
   unread: string | null
   // The `imports` of a standalone component, as written.
@@ -246,6 +248,7 @@ function componentsIn(file: string): ComponentMeta[] {
           inline: false,
           styleUrls: [],
           styles: [],
+          template: null,
           unread: null,
           imports: null,
           standalone: null,
@@ -260,6 +263,8 @@ function componentsIn(file: string): ComponentMeta[] {
           const key = property.key?.name ?? property.key?.value
           if (key === "templateUrl") {
             meta.templateUrl = stringOf(property.value)
+          } else if (key === "template") {
+            meta.template = stringOf(property.value)
           } else if (key === "imports") {
             meta.imports = property.value
           } else if (key === "standalone") {
@@ -848,6 +853,17 @@ function noStylesheet(written: string, at: string) {
   return `the stylesheet ${written} does not exist`
 }
 
+// A <style> in the template is the component's too: Angular's compiler
+// adds its text to the styles the decorator names. Its content is raw
+// text, so it ends at the first </style>.
+function styleElementsOf(markup: string) {
+  return [
+    ...markup
+      .replace(/<!--[\s\S]*?-->/g, "")
+      .matchAll(/<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi),
+  ].map((match) => match[1])
+}
+
 function declaredBy(file: string, metas: ComponentMeta[]) {
   const declared = declaredNothing()
   const seen = new Set<string>()
@@ -867,6 +883,14 @@ function declaredBy(file: string, metas: ComponentMeta[]) {
     }
     for (const source of meta.styles) {
       declareStyles(source, file, declared, reading)
+    }
+    const template =
+      meta.templateUrl === null
+        ? file
+        : path.resolve(path.dirname(file), meta.templateUrl)
+    const markup = meta.templateUrl === null ? meta.template : read(template)
+    for (const source of styleElementsOf(markup ?? "")) {
+      declareStyles(source, template, declared, reading)
     }
     if (!before && declared.unread) {
       declared.unread = { ...declared.unread, component: meta.name, file }
