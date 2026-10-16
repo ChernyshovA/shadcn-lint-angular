@@ -5,12 +5,11 @@
 import { readFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import * as path from "node:path"
-import { mergeConfigs } from "cn/compiler"
+import { mergeConfigs, type ConfigExtension } from "cn/compiler"
 import { defaultConfig, type ClassGroupDef, type CnConfig } from "cn/config"
 
-import { dirOf, mtimeOf, TTL } from "../project/fs"
-import { themeFileFor } from "../project/theme"
-import { themeScalesFromCss } from "../project/theme-scales"
+import { dirOf } from "../project/fs"
+import { themeScalesFor } from "../project/theme"
 import { warnOnce } from "../project/warn"
 import { GROUP_CATEGORY, propertyGroup } from "./categories"
 import { splitVariants } from "./classes"
@@ -95,59 +94,32 @@ export function resolveCnConfig(fromFile?: string) {
   return config
 }
 
-type ThemedConfig = {
-  config: CnConfig
-  files: string[]
-  signature: string
-  checkedAt: number
-}
-
-const themedByConfig = new WeakMap<CnConfig, Map<string, ThemedConfig>>()
-
-function signatureOf(files: string[]) {
-  return files.map((file) => `${file}:${mtimeOf(file) ?? "missing"}`).join("|")
-}
+const themedByConfig = new WeakMap<
+  CnConfig,
+  WeakMap<ConfigExtension, CnConfig>
+>()
 
 // The grammar with the project's theme scales applied, the way `cn build`
 // registers them: a declared --radius-card makes rounded-card a radius,
 // and --radius-*: initial replaces the default names. One config per
-// grammar and theme file, so every file in a project shares one
-// classifier, re-read when a stylesheet changes so a watcher run sees an
-// edited theme. A stylesheet that cannot be read leaves the grammar alone.
+// grammar and theme read, so every file in a project shares one
+// classifier, and an edited theme is a new read.
 export function themedCnConfig(fromFile?: string) {
   const config = resolveCnConfig(fromFile)
-  const themeFile = fromFile ? themeFileFor(fromFile) : null
-  if (!themeFile) return config
-  let byFile = themedByConfig.get(config)
-  if (!byFile) {
-    byFile = new Map()
-    themedByConfig.set(config, byFile)
+  const scales = fromFile ? themeScalesFor(fromFile) : null
+  if (!scales?.extend && !scales?.override) {
+    return config
   }
-  const cached = byFile.get(themeFile)
-  const now = Date.now()
-  if (cached && now - cached.checkedAt < TTL) return cached.config
-  if (cached && signatureOf(cached.files) === cached.signature) {
-    cached.checkedAt = now
-    return cached.config
+  let byScales = themedByConfig.get(config)
+  if (!byScales) {
+    byScales = new WeakMap()
+    themedByConfig.set(config, byScales)
   }
-  let themed = config
-  let files = [themeFile]
-  try {
-    const theme = themeScalesFromCss([themeFile])
-    files = theme.files
-    themed = mergeConfigs(config, theme.extension)
-  } catch (error) {
-    warnOnce(
-      `theme-scales:${themeFile}`,
-      `The theme scales in ${themeFile} could not be read (${(error as Error).message}), so classes such as rounded-card that it declares are unclassified until the stylesheet is fixed.`
-    )
+  let themed = byScales.get(scales)
+  if (!themed) {
+    themed = mergeConfigs(config, scales)
+    byScales.set(scales, themed)
   }
-  byFile.set(themeFile, {
-    config: themed,
-    files,
-    signature: signatureOf(files),
-    checkedAt: now,
-  })
   return themed
 }
 

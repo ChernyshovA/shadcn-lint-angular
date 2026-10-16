@@ -10,6 +10,7 @@ import { pathToFileURL } from "node:url"
 
 import { splitVariants } from "../grammar/classes"
 import { didYouMean } from "../grammar/similar"
+import { packageRoot, resolveFile } from "../project/resolve"
 import { parseImports } from "../project/theme"
 
 type DesignSystem = {
@@ -113,7 +114,7 @@ function* tailwindImporters(cssFile: string) {
         yield path.dirname(file)
         continue
       }
-      const resolved = resolveStylesheet(path.dirname(file), id)
+      const resolved = resolveImport(path.dirname(file), id)
       if (resolved) queue.push(realpathOf(resolved))
     }
   }
@@ -311,6 +312,17 @@ export function resolveStylesheet(base: string, id: string) {
   return stylesheetAt(pkgDir, "index")
 }
 
+// The project's bundler resolves its aliases in CSS too: Vite builds
+// `@import "@/styles/type.css"` through the same paths as a script.
+function resolveImport(base: string, id: string) {
+  return (
+    resolveStylesheet(base, id) ??
+    resolveFile(id, base, packageRoot(path.join(base, "index.css")) ?? base, [
+      ".css",
+    ])
+  )
+}
+
 // The real path of a file reached through a symlink: what its own
 // imports resolve from.
 function realpathOf(file: string) {
@@ -347,7 +359,7 @@ async function build(cssFile: string): Promise<Loaded> {
     base: dir,
     async loadStylesheet(id, base) {
       if (/^(?:https?:|data:)/.test(id)) return { base, content: "" }
-      const resolved = resolveStylesheet(base, id)
+      const resolved = resolveImport(base, id)
       // Refusing to judge beats judging against half a theme.
       if (!resolved) {
         throw new Error(`@import "${id}" could not be resolved from ${base}`)
