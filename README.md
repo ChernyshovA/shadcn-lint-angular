@@ -44,20 +44,21 @@ and set up shadcn-lint-angular in this project.
 
 ## Get started
 
-Requires Node.js 20.19 and ESLint 9.30 or later, ESLint 10 included. A project set up with `ng add angular-eslint` already has ESLint: install `shadcn-lint-angular` alone and add its blocks to the `eslint.config.js` that wrote, as the [Angular guide](https://github.com/ChernyshovA/shadcn-lint-angular/blob/main/docs/angular.md#eslint) shows. Otherwise:
+Requires Node.js 20.19 and ESLint 9.30 or later, ESLint 10 included.
 
 ```bash
-# angular-eslint takes the major version of the project's Angular
-npm install -D shadcn-lint-angular eslint angular-eslint@21 typescript-eslint
+ng add angular-eslint  # skip it if the project lints with ESLint already
+npm install -D shadcn-lint-angular
 ```
 
-```js
-// eslint.config.mjs
-import angular from "angular-eslint"
-import { defineConfig } from "eslint/config"
-import { plugin as shadcn } from "shadcn-lint-angular"
-import tseslint from "typescript-eslint"
+`ng add angular-eslint` installs the latest angular-eslint, made for the latest Angular; on an older one, name its major, `ng add angular-eslint@21`, as `ng add` asks. It writes `eslint.config.js`; add the plugin's blocks after its own:
 
+```js
+// eslint.config.js
+const { plugin: shadcn } = require("shadcn-lint-angular")
+// and the requires ng add wrote
+
+/** @type {import("eslint").Linter.RulesRecord} */
 const rules = {
   "shadcn/no-raw-colors": "error",
   "shadcn/no-arbitrary-values": "error",
@@ -65,20 +66,10 @@ const rules = {
   "shadcn/no-inline-styles": "error",
 }
 
-export default defineConfig([
-  {
-    files: ["**/*.ts"],
-    languageOptions: { parser: tseslint.parser },
-    processor: angular.processInlineTemplates,
-    plugins: { shadcn },
-    rules,
-  },
-  {
-    files: ["**/*.html"],
-    languageOptions: { parser: angular.templateParser },
-    plugins: { shadcn },
-    rules,
-  },
+module.exports = defineConfig([
+  // the blocks ng add angular-eslint wrote
+  { files: ["**/*.ts"], plugins: { shadcn }, rules },
+  { files: ["**/*.html"], plugins: { shadcn }, rules },
 ])
 ```
 
@@ -86,7 +77,7 @@ export default defineConfig([
 npx eslint .
 ```
 
-The [Angular guide](https://github.com/ChernyshovA/shadcn-lint-angular/blob/main/docs/angular.md) covers the `eslint.config.js` that `ng add angular-eslint` writes, Nx, Oxlint, the Tailwind entry, spartan, Angular Material and PrimeNG, `no-restyle` contracts, and what is not read.
+The [Angular guide](https://github.com/ChernyshovA/shadcn-lint-angular/blob/main/docs/angular.md) covers a config without `ng add`, Nx, Oxlint, the Tailwind entry, spartan, Angular Material and PrimeNG, `no-restyle` contracts, and what is not read.
 
 ## Rules
 

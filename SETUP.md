@@ -16,8 +16,9 @@ and processor setup without adding those rules.
   that hold UI components, the lint configs, and the task runner.
 - Use the existing ESLint setup, usually the `eslint.config.js` that
   `ng add angular-eslint` or Nx wrote. If there is no ESLint, set it up
-  with `ng add angular-eslint`, which picks the `angular-eslint` version
-  for the project's Angular. Oxlint cannot read Angular templates: if the
+  with `ng add angular-eslint@<major>`, the major of the project's
+  Angular: without one, `ng add` installs the latest angular-eslint,
+  which refuses an older Angular. Oxlint cannot read Angular templates: if the
   project has only Oxlint, keep it and tell the user that templates need
   ESLint. Check Node.js and linter version compatibility against the
   guide.

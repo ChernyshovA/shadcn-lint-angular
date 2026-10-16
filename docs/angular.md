@@ -12,22 +12,25 @@ Requires Node.js 20.19 or later.
 
 ## ESLint
 
-Requires ESLint 9.30 or later.
+Requires ESLint 9.30 or later, ESLint 10 included.
 
 ```bash
-# angular-eslint takes the major version of the project's Angular
-npm install -D shadcn-lint-angular eslint angular-eslint@21 typescript-eslint
+ng add angular-eslint  # skip it if the project lints with ESLint already
+npm install -D shadcn-lint-angular
 ```
 
-`ng add angular-eslint` writes `eslint.config.js` in CommonJS, with a
-block for `**/*.ts` and one for `**/*.html`. Add the plugin's blocks
-after them; they take the parser and the processor from angular-eslint's:
+`ng add angular-eslint` installs the latest angular-eslint, made for the
+latest Angular; on an older one, name its major, `ng add angular-eslint@21`,
+as `ng add` asks. It writes `eslint.config.js` in CommonJS, with a block
+for `**/*.ts` and one for `**/*.html`. Add the plugin's blocks after them;
+they take the parser and the processor from angular-eslint's:
 
 ```js
 // eslint.config.js
 const { plugin: shadcn } = require("shadcn-lint-angular")
 // and the requires ng add wrote
 
+/** @type {import("eslint").Linter.RulesRecord} */
 const rules = {
   "shadcn/no-raw-colors": "error",
   "shadcn/no-arbitrary-values": "error",
@@ -44,8 +47,16 @@ module.exports = defineConfig([
 
 `require` loads `shadcn-lint-angular`, an ES module, on Node.js 20.19 and
 later. ESLint reads `eslint.config.js` before `eslint.config.mjs`, so an
-`eslint.config.mjs` written beside it is ignored. Without angular-eslint's
-config, create `eslint.config.mjs`:
+`eslint.config.mjs` written beside it is ignored. The type on `rules`
+keeps the `// @ts-check` that `ng add` writes from reading `"error"` as
+any string.
+
+Without `ng add`, install angular-eslint of the project's Angular major
+and create `eslint.config.mjs`:
+
+```bash
+npm install -D shadcn-lint-angular eslint typescript-eslint angular-eslint@22  # Angular 22
+```
 
 ```js
 import angular from "angular-eslint"
@@ -110,6 +121,7 @@ tag could be resolved through, so the rule judges an element only once a
 contract's `pattern` names it ([Component names](#component-names)):
 
 ```js
+/** @type {import("eslint").Linter.RulesRecord} */
 const restyle = {
   "shadcn/no-restyle": [
     "error",
