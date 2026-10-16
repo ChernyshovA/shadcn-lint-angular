@@ -30,7 +30,7 @@ defining file to the variant methods:
 
 ```ts
 import { resolve } from "node:path"
-import { project } from "@shadcn/lint"
+import { project } from "shadcn-lint-angular"
 
 const theme = project.themeFileFor(resolve("src/app/page.tsx"))
 const variants = project.variantNamesFor(

@@ -143,7 +143,7 @@ In `.oxlintrc.json`:
 
 ```json
 {
-  "jsPlugins": ["@shadcn/lint"],
+  "jsPlugins": ["shadcn-lint-angular"],
   "extends": ["./design-system.lint.json"]
 }
 ```

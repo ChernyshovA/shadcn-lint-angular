@@ -15,7 +15,8 @@ Requires Node.js 20.19 or later.
 Requires ESLint 9.30 or later.
 
 ```bash
-npm install -D shadcn-lint-angular eslint angular-eslint typescript-eslint
+# angular-eslint takes the major version of the project's Angular
+npm install -D shadcn-lint-angular eslint angular-eslint@21 typescript-eslint
 ```
 
 `ng add angular-eslint` writes `eslint.config.js` in CommonJS, with a
@@ -419,7 +420,7 @@ structural directive (`*hlmIf`) and events on `window`, `document` or
 "bg-pink-500" is not allowed on <button hlmBtn>: <button hlmBtn> owns
 its color. Use a variant: default, outline, secondary, ghost,
 destructive, link. Add a new variant in
-libs/helm/button/src/lib/hlm-button.ts only if the design explicitly
+libs/ui/button/src/lib/hlm-button.ts only if the design explicitly
 calls for a treatment none of these provides.
 ```
 
@@ -509,6 +510,10 @@ once on stderr, prefixed `[shadcn-lint-angular]`:
 - **A template in another directory than its component.**
   `templateUrl: "../shared/card.html"` is not traced back, so that
   template is checked without its component's styles.
+- **A stylesheet a template links.** Angular's compiler adds
+  `<link rel="stylesheet" href="./card.css">` in a template to the
+  component's styles; it is not read, so a class only it declares is
+  reported. Name the stylesheet in `styleUrl` instead.
 - **Classes a mixin generates** through `@include`, and indented Sass
   and Stylus beyond their flat `.class` selectors.
 - **Another component's styles.** With emulated encapsulation they do

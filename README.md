@@ -31,14 +31,24 @@ Inline style sets color. Style through classes; use CSS custom properties for
 dynamic values
 ```
 
-That is a spartan app with the `no-restyle` contracts from the [Angular guide](https://github.com/ChernyshovA/shadcn-lint-angular/blob/main/docs/angular.md#design-system-components); `no-raw-colors` reports `bg-pink-500` too.
+That is a spartan app with the [spartan settings](https://github.com/ChernyshovA/shadcn-lint-angular/blob/main/docs/angular.md#spartan) and the [`no-restyle` contracts](https://github.com/ChernyshovA/shadcn-lint-angular/blob/main/docs/angular.md#design-system-components) from the Angular guide; `no-raw-colors` reports `bg-pink-500` too.
+
+## Quickstart
+
+Give your coding agent this prompt:
+
+```text
+Read https://github.com/ChernyshovA/shadcn-lint-angular/blob/main/SETUP.md
+and set up shadcn-lint-angular in this project.
+```
 
 ## Get started
 
-Requires Node.js 20.19 and ESLint 9.30 or later.
+Requires Node.js 20.19 and ESLint 9.30 or later, ESLint 10 included. A project set up with `ng add angular-eslint` already has ESLint: install `shadcn-lint-angular` alone and add its blocks to the `eslint.config.js` that wrote, as the [Angular guide](https://github.com/ChernyshovA/shadcn-lint-angular/blob/main/docs/angular.md#eslint) shows. Otherwise:
 
 ```bash
-npm install -D shadcn-lint-angular eslint angular-eslint typescript-eslint
+# angular-eslint takes the major version of the project's Angular
+npm install -D shadcn-lint-angular eslint angular-eslint@21 typescript-eslint
 ```
 
 ```js
@@ -99,7 +109,7 @@ The settings are `@shadcn/lint`'s, described in [its README](https://github.com/
 
 This release is built on `@shadcn/lint`'s `main` at [`8551d00`](https://github.com/shadcn-ui/lint/commit/8551d008d756fdf7bc02e74ccb3224ee3b140267), after 0.2.1. Files that are not Angular code lint as they do there, apart from:
 
-- fixes for [shadcn-ui/lint#98](https://github.com/shadcn-ui/lint/issues/98) (hyphenated SVG color attributes), [#108](https://github.com/shadcn-ui/lint/issues/108) (`@import "tailwindcss"` read as JavaScript) and [#111](https://github.com/shadcn-ui/lint/issues/111) (`tsconfig.base.json` paths in Nx), proposed upstream in [#105](https://github.com/shadcn-ui/lint/pull/105), [#113](https://github.com/shadcn-ui/lint/pull/113) and [#114](https://github.com/shadcn-ui/lint/pull/114);
+- fixes for [shadcn-ui/lint#98](https://github.com/shadcn-ui/lint/issues/98) (hyphenated SVG color attributes), [#108](https://github.com/shadcn-ui/lint/issues/108) (a stylesheet's `@import "tailwindcss"` read Tailwind's JavaScript as CSS) and [#111](https://github.com/shadcn-ui/lint/issues/111) (`tsconfig.base.json` paths in Nx), proposed upstream in [#105](https://github.com/shadcn-ui/lint/pull/105), [#113](https://github.com/shadcn-ui/lint/pull/113) and [#114](https://github.com/shadcn-ui/lint/pull/114);
 - two settings that change nothing unless set: `settings.shadcn.entryPoint` and `no-restyle`'s `multipleContracts`;
 - warnings prefixed `[shadcn-lint-angular]`.
 

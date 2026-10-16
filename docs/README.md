@@ -1,6 +1,6 @@
 # Documentation
 
-Start with [Get started](../README.md#get-started) to set up ESLint or Oxlint.
+Start with [Get started](../README.md#get-started) to set up ESLint, and the [Angular guide](./angular.md) for Nx, Oxlint and spartan.
 
 ## Frameworks
 
