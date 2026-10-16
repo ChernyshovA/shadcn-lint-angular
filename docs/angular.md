@@ -12,10 +12,11 @@ Requires Node.js 20.19 or later.
 
 ## ESLint
 
-Requires ESLint 9.30 or later, ESLint 10 included.
+Requires ESLint 9.30 or later, ESLint 10 included. Skip `ng add` if the
+project lints with ESLint already.
 
 ```bash
-ng add angular-eslint  # skip it if the project lints with ESLint already
+ng add angular-eslint
 npm install -D shadcn-lint-angular
 ```
 
@@ -51,11 +52,11 @@ later. ESLint reads `eslint.config.js` before `eslint.config.mjs`, so an
 keeps the `// @ts-check` that `ng add` writes from reading `"error"` as
 any string.
 
-Without `ng add`, install angular-eslint of the project's Angular major
-and create `eslint.config.mjs`:
+Without `ng add`, install angular-eslint of the project's Angular major,
+22 for Angular 22, and create `eslint.config.mjs`:
 
 ```bash
-npm install -D shadcn-lint-angular eslint typescript-eslint angular-eslint@22  # Angular 22
+npm install -D shadcn-lint-angular eslint typescript-eslint angular-eslint@22
 ```
 
 ```js

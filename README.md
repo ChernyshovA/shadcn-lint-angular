@@ -44,10 +44,10 @@ and set up shadcn-lint-angular in this project.
 
 ## Get started
 
-Requires Node.js 20.19 and ESLint 9.30 or later, ESLint 10 included.
+Requires Node.js 20.19 and ESLint 9.30 or later, ESLint 10 included. Skip `ng add` if the project lints with ESLint already.
 
 ```bash
-ng add angular-eslint  # skip it if the project lints with ESLint already
+ng add angular-eslint
 npm install -D shadcn-lint-angular
 ```
 

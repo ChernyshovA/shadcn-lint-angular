@@ -2,7 +2,7 @@
 
 ## 0.1.1
 
-- Publish the README with the package, so npm shows it. The code is 0.1.0's.
+- No changes: the code and the README are 0.1.0's.
 
 ## 0.1.0
 
