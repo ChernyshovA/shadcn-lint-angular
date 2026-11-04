@@ -1,6 +1,6 @@
 {
   "name": "shadcn-lint-angular",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "@shadcn/lint with Angular template support: a programmable agent-first linter for Tailwind design systems.",
   "license": "MIT",
   "author": {

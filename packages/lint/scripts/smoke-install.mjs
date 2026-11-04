@@ -3,6 +3,7 @@
 // with ESLint and with Oxlint. Catches what unit tests cannot: the
 // exports map, the ESM build and its worker, the optional oxc-parser, the copied
 // README, and the messages users see. Run: node scripts/smoke-install.mjs
+// --tarball /path/pkg.tgz tests an existing candidate on another runtime.
 
 import { execSync, spawnSync } from "node:child_process"
 import * as fs from "node:fs"
@@ -37,11 +38,19 @@ const expect = (label, out, needle) => {
 
 try {
   // 1. Pack.
-  const packOut = run(
-    `pnpm pack --pack-destination ${JSON.stringify(dir)}`,
-    PKG_DIR
-  )
-  const tarball = packOut.trim().split("\n").pop()
+  const flag = process.argv.indexOf("--tarball")
+  let tarball
+  if (flag !== -1) {
+    if (!process.argv[flag + 1]) throw new Error("--tarball needs a path")
+    tarball = path.join(dir, "candidate.tgz")
+    fs.copyFileSync(path.resolve(process.argv[flag + 1]), tarball)
+  } else {
+    const packOut = run(
+      `pnpm pack --pack-destination ${JSON.stringify(dir)}`,
+      PKG_DIR
+    )
+    tarball = packOut.trim().split("\n").pop()
+  }
   const listing = run(`tar -tzf ${JSON.stringify(tarball)}`)
   expect("tarball has the ESM build", listing, "package/dist/index.js")
   expect(
