@@ -58,7 +58,7 @@ npm install -D shadcn-lint-angular
 const { plugin: shadcn } = require("shadcn-lint-angular")
 // and the requires ng add wrote
 
-/** @type {import("eslint").Linter.RulesRecord} */
+/** @type {import("eslint").Linter.Config["rules"]} */
 const rules = {
   "shadcn/no-raw-colors": "error",
   "shadcn/no-arbitrary-values": "error",
@@ -98,10 +98,11 @@ The settings are `@shadcn/lint`'s, described in [its README](https://github.com/
 
 ## Differences from @shadcn/lint
 
-This release is built on `@shadcn/lint`'s `main` at [`8551d00`](https://github.com/shadcn-ui/lint/commit/8551d008d756fdf7bc02e74ccb3224ee3b140267), after 0.2.1. Files that are not Angular code lint as they do there, apart from:
+This release is built on [`@shadcn/lint 0.2.5`](https://github.com/shadcn-ui/lint/releases/tag/%40shadcn%2Flint%400.2.5), commit [`529de36`](https://github.com/shadcn-ui/lint/commit/529de36e185297a46ed5ef7049eb2965272d102e). The SVG color and Nx fixes now come from upstream, as does the shared stylesheet resolver. Remaining differences outside Angular code are:
 
-- fixes for [shadcn-ui/lint#98](https://github.com/shadcn-ui/lint/issues/98) (hyphenated SVG color attributes), [#108](https://github.com/shadcn-ui/lint/issues/108) (a stylesheet's `@import "tailwindcss"` read Tailwind's JavaScript as CSS) and [#111](https://github.com/shadcn-ui/lint/issues/111) (`tsconfig.base.json` paths in Nx), proposed upstream in [#105](https://github.com/shadcn-ui/lint/pull/105), [#113](https://github.com/shadcn-ui/lint/pull/113) and [#114](https://github.com/shadcn-ui/lint/pull/114);
+- stylesheet imports through conditional `package.json#imports` retain their `style` target; an invalid or script-only export cannot silently substitute an adjacent CSS file;
 - two settings that change nothing unless set: `settings.shadcn.entryPoint` and `no-restyle`'s `multipleContracts`;
+- corrected declarations for strict TypeScript consumers, with rule-option checking tested on ESLint 9.39.5 and 10.14.0;
 - warnings prefixed `[shadcn-lint-angular]`.
 
 For React, Vue or Svelte alone, use [`@shadcn/lint`](https://github.com/shadcn-ui/lint): its README covers the agent evals, settings and monorepos, which apply here too.

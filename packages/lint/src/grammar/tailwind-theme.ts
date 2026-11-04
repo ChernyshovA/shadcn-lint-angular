@@ -1,8 +1,8 @@
-// Generated from tailwindcss@4.3.3 by scripts/generate-tailwind-theme.mjs.
+// Generated from tailwindcss@4.3.4 by scripts/generate-tailwind-theme.mjs.
 // Do not edit by hand. The default palette and scales, as theme.css
 // declares them, for naming the nearest token in a message.
 
-export const TAILWIND_VERSION = "4.3.3"
+export const TAILWIND_VERSION = "4.3.4"
 
 export const SPACING = "0.25rem"
 

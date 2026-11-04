@@ -98,7 +98,7 @@ describe("flat config completion", () => {
     const source = fs.readFileSync(path.join(ROOT, "src/index.ts"), "utf8")
     const block =
       source.match(/declare module "@eslint\/core" \{[\s\S]*?\n\}/)?.[0] ?? ""
-    const declared = [...block.matchAll(/"(shadcn\/[a-z-]+)"\?:/g)].map(
+    const declared = [...block.matchAll(/"(shadcn\/[a-z-]+)":/g)].map(
       (m) => m[1]
     )
     expect(declared.sort()).toEqual([...RULE_NAMES].sort())

@@ -38,6 +38,9 @@ jobs:
       - run: pnpm run typecheck
       - run: pnpm run build
       - run: pnpm run test
+      - name: Check packed types with ESLint 9 and 10
+        if: matrix.os == 'ubuntu-latest' && matrix.node == 24
+        run: pnpm --filter shadcn-lint-angular run test:types
       # Ratchet against the shadcn registry at the commit pinned in
       # packages/evals/scripts/registry.json (fetched sparsely; no local
       # checkout assumed). Counts may only go down.

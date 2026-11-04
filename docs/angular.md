@@ -31,7 +31,7 @@ they take the parser and the processor from angular-eslint's:
 const { plugin: shadcn } = require("shadcn-lint-angular")
 // and the requires ng add wrote
 
-/** @type {import("eslint").Linter.RulesRecord} */
+/** @type {import("eslint").Linter.Config["rules"]} */
 const rules = {
   "shadcn/no-raw-colors": "error",
   "shadcn/no-arbitrary-values": "error",
@@ -122,7 +122,7 @@ tag could be resolved through, so the rule judges an element only once a
 contract's `pattern` names it ([Component names](#component-names)):
 
 ```js
-/** @type {import("eslint").Linter.RulesRecord} */
+/** @type {import("eslint").Linter.Config["rules"]} */
 const restyle = {
   "shadcn/no-restyle": [
     "error",
