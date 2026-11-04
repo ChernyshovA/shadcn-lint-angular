@@ -186,3 +186,16 @@ describe("Vue templates", () => {
     ])
   })
 })
+
+describe("SVG color attributes in Vue markup", () => {
+  it("reads the hyphenated stop-color and flood-color names", () => {
+    expect(
+      found(
+        `<svg><linearGradient id="g"><stop stop-color="#f00" /></linearGradient><filter id="f"><feFlood flood-color="#00f" /></filter></svg>`
+      )
+    ).toEqual([
+      `shadcn/no-raw-colors: stop-color="#f00" hardcodes a color`,
+      `shadcn/no-raw-colors: flood-color="#00f" hardcodes a color`,
+    ])
+  })
+})

@@ -100,6 +100,32 @@ describe("scanAllStrings", () => {
       ],
     })
   })
+
+  test("plain object keys are names, class object keys are classes", () => {
+    tester.run("no-raw-colors", noRawColors as any, {
+      valid: [
+        {
+          filename: PAGE,
+          code: `const layer = { paint: { "fill-color": tone, "fill-opacity": 0.85 }, layout: { "text-field": "name" } }\nconst { "fill-color": fill } = layer.paint\nclass Layer { "fill-color" = tone }\ntype Paint = { "fill-color": string }\nexport const A = () => <div data-layer={layer} />`,
+          options: [{ scanAllStrings: true }],
+        },
+      ],
+      invalid: [
+        {
+          filename: PAGE,
+          code: `import { cn } from "@/lib/utils"\nexport const A = ({ on }) => <div className={cn({ "bg-pink-500": on })} />`,
+          options: [{ scanAllStrings: true }],
+          errors: [{ messageId: "paletteClassFar" }],
+        },
+        {
+          filename: PAGE,
+          code: `const tones = { ["bg-pink-500"]: 1 }\nexport const A = () => <div data-tones={tones} />`,
+          options: [{ scanAllStrings: true }],
+          errors: [{ messageId: "paletteClassFar" }],
+        },
+      ],
+    })
+  })
 })
 
 describe("SVG presentation attributes", () => {
@@ -110,6 +136,13 @@ describe("SVG presentation attributes", () => {
     expect(isRawColorValue("currentColor")).toBe(false)
     expect(isRawColorValue("none")).toBe(false)
     expect(isRawColorValue("var(--color-brand)")).toBe(false)
+    expect(isRawColorValue("oklch(var(--primary-oklch))")).toBe(false)
+    expect(isRawColorValue("oklch(var(--x) / 0.2)")).toBe(false)
+    expect(isRawColorValue("oklch(var(--x) / var(--alpha))")).toBe(false)
+    expect(isRawColorValue("oklch(0.62 0.19 260)")).toBe(true)
+    expect(isRawColorValue("oklch(var(--x, 0.62 0.19 260))")).toBe(true)
+    expect(isRawColorValue("oklch(var(--x) var(--y))")).toBe(true)
+    expect(isRawColorValue("color-mix(var(--x))")).toBe(true)
     expect(isRawColorValue("url(#gradient)")).toBe(false)
   })
 

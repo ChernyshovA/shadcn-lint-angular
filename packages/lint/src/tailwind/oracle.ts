@@ -10,7 +10,7 @@ import { pathToFileURL } from "node:url"
 
 import { splitVariants } from "../grammar/classes"
 import { didYouMean } from "../grammar/similar"
-import { packageRoot, resolveFile } from "../project/resolve"
+import { resolveStylesheetImport } from "../project/stylesheets"
 import { parseImports } from "../project/theme"
 
 type DesignSystem = {
@@ -86,6 +86,13 @@ const SIGNATURE_TTL = 1000
 
 const FONT_SIZE = /(?:^|[;{\s])font-size\s*:/
 
+// Far past any real class. Tailwind parses a candidate recursively, once
+// per variant, and slows quadratically on a long value, so one hostile
+// token could stall the worker or overflow its stack. A class past
+// either limit is not judged, the way an arbitrary property is not.
+const MAX_CANDIDATE_LENGTH = 10_000
+const MAX_VARIANTS = 64
+
 const loaded = new Map<string, Loaded>()
 let generations = 0
 
@@ -114,7 +121,7 @@ function* tailwindImporters(cssFile: string) {
         yield path.dirname(file)
         continue
       }
-      const resolved = resolveImport(path.dirname(file), id)
+      const resolved = resolveStylesheetImport(path.dirname(file), id)
       if (resolved) queue.push(realpathOf(resolved))
     }
   }
@@ -196,137 +203,6 @@ async function importModule(id: string, base: string) {
   }
 }
 
-function existingFile(candidate: string) {
-  try {
-    return fs.statSync(candidate).isFile() ? candidate : null
-  } catch {
-    return null
-  }
-}
-
-function stylesheetAt(dir: string, name: string) {
-  const base = path.join(dir, name)
-  return (
-    existingFile(base) ??
-    existingFile(`${base}.css`) ??
-    existingFile(path.join(base, "index.css"))
-  )
-}
-
-function styleTarget(entry: unknown): string | null {
-  if (typeof entry === "string") return entry
-  if (!entry || typeof entry !== "object") return null
-  const record = entry as Record<string, unknown>
-  for (const key of ["style", "default"]) {
-    const target = styleTarget(record[key])
-    if (target) return target
-  }
-  return null
-}
-
-// The exports entry for a subpath: the exact key, else the longest
-// pattern key whose `*` matches, expanded the way Node expands it, so
-// `"./*.css": "./dist/*.css"` serves `demo-widgets/styles.css`.
-function exportedStyle(exports: Record<string, unknown>, subpath: string) {
-  const exact = styleTarget(exports[`./${subpath}`])
-  if (exact) return exact
-  const patterns = Object.keys(exports)
-    .filter((key) => key.startsWith("./") && key.includes("*"))
-    .sort((a, b) => b.length - a.length)
-  for (const key of patterns) {
-    const star = key.indexOf("*")
-    const prefix = key.slice(2, star)
-    const suffix = key.slice(star + 1)
-    if (
-      subpath.length < prefix.length + suffix.length ||
-      !subpath.startsWith(prefix) ||
-      !subpath.endsWith(suffix)
-    )
-      continue
-    const target = styleTarget(exports[key])
-    if (!target) continue
-    return target.replace(
-      "*",
-      subpath.slice(prefix.length, subpath.length - suffix.length)
-    )
-  }
-  return null
-}
-
-function packageDirectory(base: string, name: string) {
-  let dir = base
-  for (let depth = 0; depth < 32; depth++) {
-    const candidate = path.join(dir, "node_modules", name)
-    if (existingFile(path.join(candidate, "package.json"))) return candidate
-    const parent = path.dirname(dir)
-    if (parent === dir) break
-    dir = parent
-  }
-  return null
-}
-
-// Resolves an @import the way Tailwind's bundler does. Node's own
-// resolver cannot: tw-animate-css exports only a style condition.
-export function resolveStylesheet(base: string, id: string) {
-  if (id === "tailwindcss")
-    return resolveStylesheet(base, "tailwindcss/index.css")
-  if (id.startsWith(".") || path.isAbsolute(id)) {
-    return stylesheetAt(path.dirname(path.resolve(base, id)), path.basename(id))
-  }
-  const match = id.match(/^(@[^/]+\/[^/]+|[^/]+)(?:\/(.*))?$/)
-  if (!match) return null
-  const [, name, subpath] = match
-  const pkgDir = packageDirectory(base, name)
-  if (!pkgDir) return null
-  let pkg: Record<string, unknown> = {}
-  try {
-    pkg = JSON.parse(
-      fs.readFileSync(path.join(pkgDir, "package.json"), "utf-8")
-    )
-  } catch {
-    // A package without a readable manifest still has files.
-  }
-  const exports = pkg.exports
-  if (subpath) {
-    const target =
-      exports && typeof exports === "object"
-        ? exportedStyle(exports as Record<string, unknown>, subpath)
-        : null
-    if (target) return existingFile(path.join(pkgDir, target))
-    return stylesheetAt(
-      path.dirname(path.join(pkgDir, subpath)),
-      path.basename(subpath)
-    )
-  }
-  const root =
-    typeof exports === "string"
-      ? exports
-      : exports && typeof exports === "object"
-        ? styleTarget((exports as Record<string, unknown>)["."] ?? exports)
-        : null
-  for (const target of [root, pkg.style, pkg.main]) {
-    if (typeof target !== "string") continue
-    const file = existingFile(path.join(pkgDir, target))
-    if (file) return file
-  }
-  return stylesheetAt(pkgDir, "index")
-}
-
-// The project's bundler resolves its aliases in CSS too: Vite builds
-// `@import "@/styles/type.css"` through the same paths as a script.
-function resolveImport(base: string, id: string) {
-  return (
-    resolveStylesheet(base, id) ??
-    resolveFile(
-      id,
-      base,
-      packageRoot(path.join(base, "index.css")) ?? base,
-      [".css"],
-      { stylesheet: true }
-    )
-  )
-}
-
 // The real path of a file reached through a symlink: what its own
 // imports resolve from.
 function realpathOf(file: string) {
@@ -363,7 +239,7 @@ async function build(cssFile: string): Promise<Loaded> {
     base: dir,
     async loadStylesheet(id, base) {
       if (/^(?:https?:|data:)/.test(id)) return { base, content: "" }
-      const resolved = resolveImport(base, id)
+      const resolved = resolveStylesheetImport(base, id)
       // Refusing to judge beats judging against half a theme.
       if (!resolved) {
         throw new Error(`@import "${id}" could not be resolved from ${base}`)
@@ -443,6 +319,31 @@ function variantKnown(system: Loaded, variant: string) {
   )
 }
 
+function checkable(candidate: string) {
+  return (
+    candidate.length <= MAX_CANDIDATE_LENGTH &&
+    splitVariants(candidate).variants.length <= MAX_VARIANTS
+  )
+}
+
+// Undefined when Tailwind throws on this one candidate, from a plugin or
+// its own parser: that costs the candidate its answer, not the theme.
+function cssOf(system: Loaded, candidate: string) {
+  try {
+    return system.ds.candidatesToCss([candidate])[0]
+  } catch {
+    return undefined
+  }
+}
+
+function cssOfAll(system: Loaded, candidates: string[]) {
+  try {
+    return system.ds.candidatesToCss(candidates)
+  } catch {
+    return candidates.map((candidate) => cssOf(system, candidate))
+  }
+}
+
 // A base utility that exists on its own means the variant is misspelled;
 // otherwise the utility is, matched against every class Tailwind knows.
 function suggestionFor(system: Loaded, candidate: string) {
@@ -450,7 +351,7 @@ function suggestionFor(system: Loaded, candidate: string) {
   // With a prefix, the bare utility is only valid as tw:flex.
   const prefixed = system.prefix !== null && variants[0] === system.prefix
   const probe = prefixed ? `${system.prefix}:${base}` : base
-  if (variants.length && system.ds.candidatesToCss([probe])[0] !== null) {
+  if (variants.length && typeof cssOf(system, probe) === "string") {
     let changed = false
     const fixed = variants.map((variant, i) => {
       if (prefixed && i === 0) return variant
@@ -479,7 +380,7 @@ function baseKnownOf(system: Loaded, candidate: string) {
       ? `${system.prefix}:${base}`
       : base
   if (variants.length === (bare === base ? 0 : 1)) return false
-  return system.ds.candidatesToCss([bare])[0] !== null
+  return typeof cssOf(system, bare) === "string"
 }
 
 export async function query(
@@ -492,18 +393,20 @@ export async function query(
   } catch (error) {
     return { ok: false, reason: (error as Error).message }
   }
-  const css = system.ds.candidatesToCss(candidates)
+  const checked = candidates.filter(checkable)
+  const css = cssOfAll(system, checked)
   const unknown: Unknown[] = []
   const fontSizes: string[] = []
-  for (let i = 0; i < candidates.length; i++) {
+  for (let i = 0; i < checked.length; i++) {
+    if (css[i] === undefined) continue
     if (css[i] !== null) {
-      if (FONT_SIZE.test(css[i]!)) fontSizes.push(candidates[i])
+      if (FONT_SIZE.test(css[i]!)) fontSizes.push(checked[i])
       continue
     }
     unknown.push({
-      token: candidates[i],
-      suggestion: suggestionFor(system, candidates[i]),
-      baseKnown: baseKnownOf(system, candidates[i]),
+      token: checked[i],
+      suggestion: suggestionFor(system, checked[i]),
+      baseKnown: baseKnownOf(system, checked[i]),
     })
   }
   return {

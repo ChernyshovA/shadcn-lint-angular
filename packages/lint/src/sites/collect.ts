@@ -12,7 +12,12 @@ import {
 import { componentsFor } from "../project/components"
 import { NODE_MODULES } from "../project/fs"
 import { definingExportOf, type ExportBinding } from "../project/modules"
-import { wrapperTargetOf, type WrapperTarget } from "../project/wrappers"
+import {
+  addsNoClasses,
+  wrapperPropOf,
+  wrapperTargetOf,
+  type WrapperTarget,
+} from "../project/wrappers"
 import { fileOf } from "../rules/messages"
 import { withSettings } from "../rules/settings"
 import {
@@ -72,7 +77,9 @@ export const DEFAULT_MERGE_FUNCTIONS = [
 // Object arguments carry classes as values (cva), not keys (clsx).
 export const DEFAULT_VARIANT_FUNCTIONS = ["cva", "tv"]
 
-const CLASS_ATTRIBUTE = /^(class:list|[^:]*class(name)?s?)$/i
+// Any name ending in class, className or classes, but a data-* or
+// aria-* attribute is never a class list: `data-class` is a selector hook.
+const CLASS_ATTRIBUTE = /^(class:list|(?!data-|aria-)[^:]*class(name)?s?)$/i
 
 export function isClassAttribute(name: string) {
   return CLASS_ATTRIBUTE.test(name)
@@ -110,10 +117,12 @@ export function createComponentTracker(
 ) {
   const filename = fileOf(context)
   const ui = options.ui ?? []
-  const index = componentsFor(filename)
-  // A tag with no import, such as an auto-imported <UiButton>, is also
-  // looked up in settings.shadcn.ui. An import still resolves as before.
-  const tagIndex = ui.length ? componentsFor(filename, ui) : index
+  // settings.shadcn.ui owns what it names: a tag with no import, such as
+  // an auto-imported <UiButton>, and an import that resolves into it,
+  // even through the app's own barrel. An import that resolves nowhere is
+  // matched by name against components.json's directory only.
+  const index = componentsFor(filename, ui)
+  const unresolvedIndex = ui.length ? componentsFor(filename) : index
   const patterns = (options.componentImports ?? []).map(regexpOf)
   const ignored = (options.ignoreImports ?? []).map(regexpOf)
   const imports = new Map<string, ComponentImport>()
@@ -136,8 +145,10 @@ export function createComponentTracker(
   const wrapperOf = (
     key: string,
     binding: ExportBinding | null,
-    local: string | null
+    local: string | null,
+    prop: string
   ) => {
+    key = `${key}|${prop}`
     const cached = wrappers.get(key)
     if (cached !== undefined) return cached
     let target: WrapperTarget | null = null
@@ -148,7 +159,8 @@ export function createComponentTracker(
           binding.name,
           patterns,
           undefined,
-          ui
+          ui,
+          prop
         )
       }
     } else if (local && filename && /^[A-Z]/.test(local)) {
@@ -157,7 +169,8 @@ export function createComponentTracker(
         local,
         patterns,
         context.sourceCode?.ast,
-        ui
+        ui,
+        prop
       )
     }
     wrappers.set(key, target)
@@ -167,8 +180,13 @@ export function createComponentTracker(
   // Resolution first, name second: an import into the ui directory is
   // that component whatever it was renamed to, and one into a package is
   // not, however familiar. Only an unresolvable import falls back to the
-  // name, so a broken alias degrades rather than going silent.
-  const resolveName = (element: ElementName | null): ResolvedElement | null => {
+  // name, so a broken alias degrades rather than going silent. A wrapper
+  // is followed by the class attribute set on it: its `headerClassName`
+  // goes wherever the wrapper hands that prop, not where className goes.
+  const resolveName = (
+    element: ElementName | null,
+    attribute = "className"
+  ): ResolvedElement | null => {
     if (!element) return null
     // Vue writes an imported CardTitle as `<card-title>` too.
     const root =
@@ -183,26 +201,38 @@ export function createComponentTracker(
       if (imported.namespace && property === null) importedName.name = root
       const { exportName, name } = importedName
       const binding = exportName ? bindingOf(root, exportName) : null
+      const member = importedName.member
+        ? bindingOf(root, importedName.member)
+        : null
       const component = componentFromImport(
         index,
         binding,
         importedName,
-        patterns
+        patterns,
+        member,
+        ui
       )
       if (component) return { ...component, wrapper: null }
       if (binding) {
         if (NODE_MODULES.test(binding.file)) return null
         if (property !== null && !imported.namespace) return null
-        const target = wrapperOf(`${root}.${exportName}`, binding, null)
+        const target = wrapperOf(
+          `${root}.${exportName}`,
+          binding,
+          null,
+          wrapperPropOf(attribute)
+        )
         if (!target) return null
         const wrapper = property === null ? name : `${root}.${property}`
         return { component: target.component, file: target.file, wrapper }
       }
-      if (index.has(name) || index.has(imported.original)) {
+      if (unresolvedIndex.has(name) || unresolvedIndex.has(imported.original)) {
         return {
           component: name,
           file:
-            index.files.get(name) ?? index.files.get(imported.original) ?? null,
+            unresolvedIndex.files.get(name) ??
+            unresolvedIndex.files.get(imported.original) ??
+            null,
           wrapper: null,
         }
       }
@@ -213,19 +243,19 @@ export function createComponentTracker(
     // A globally registered <ui-button> is UiButton, the way Vue reads it.
     const name =
       property === null
-        ? !tagIndex.has(root) && element.alias && tagIndex.has(element.alias)
+        ? !index.has(root) && element.alias && index.has(element.alias)
           ? element.alias
           : root
-        : `${root}${property}`
-    if (tagIndex.has(name)) {
+        : `${root}${property.replace(/\./g, "")}`
+    if (index.has(name)) {
       return {
         component: name,
-        file: tagIndex.files.get(name) ?? null,
+        file: index.files.get(name) ?? null,
         wrapper: null,
       }
     }
     if (property !== null) return null
-    const target = wrapperOf(root, null, root)
+    const target = wrapperOf(root, null, root, wrapperPropOf(attribute))
     return target
       ? { component: target.component, file: target.file, wrapper: name }
       : null
@@ -488,18 +518,55 @@ function projectStatic(init: any, steps: PatternStep[]) {
   return { init: node, steps: steps.slice(i) }
 }
 
+// Svelte 5 writes a reactive value as `$derived(expr)`, which has the
+// value of `expr`. `$derived.by(fn)` is a function and stays unread.
+function derivedValueOf(init: any) {
+  const call = unwrapTs(init)
+  if (
+    call?.type !== "CallExpression" ||
+    call.callee?.type !== "Identifier" ||
+    call.callee.name !== "$derived" ||
+    call.arguments?.length !== 1 ||
+    call.arguments[0].type === "SpreadElement"
+  ) {
+    return init
+  }
+  return call.arguments[0]
+}
+
+// How many consts a route follows before the next one is unreadable, the
+// way a dynamic value is. No written chain of aliases is this deep, and
+// following a generated one would overflow the stack.
+const MAX_ROUTE = 64
+
+// The variables on the current route. A read that stops at one of them,
+// or at the end of a route too long to follow, depends on the route it
+// took, so every such stop is counted.
+class Route extends Set<any> {
+  stops = 0
+  has(value: any) {
+    const found = super.has(value)
+    if (found) this.stops++
+    return found
+  }
+}
+
 // One hop to a same-file const's initializer. `path` holds the variables
 // on the current route, so a self-reference stops while the same variable
-// read from both branches of a ternary resolves twice. A destructured
+// read from both branches of a ternary resolves on each. A destructured
 // binding gets its own slot of the initializer, and any steps a reader
 // still has to follow through a conditional.
 export function resolveIdentifier(node: any, context: any, path: Set<any>) {
+  if (path.size >= MAX_ROUTE) {
+    if (path instanceof Route) path.stops++
+    return null
+  }
   const variable = variableOf(node, context)
   if (!variable || path.has(variable)) return null
   const def = variable.defs?.[0]
   if (!def || def.type !== "Variable" || !def.node?.init) return null
   if (isWritten(variable)) return null
-  let init = def.node.init
+  let init = derivedValueOf(def.node.init)
   let steps: PatternStep[] = []
   if (def.name !== def.node.id) {
     const route = patternStepsOf(def.name, def.node.id)
@@ -786,13 +853,53 @@ export function collectClassStrings(
   const contextualStrings: ClassString[] = []
   const vocabularyStrings: ClassString[] = []
   const unresolved: any[] = []
-  const path = new Set<any>()
+  const path = new Route()
   let resolvedCalls = 0
+  // A literal reached twice, through both branches of `on ? c : c`, is
+  // one class at this site.
+  const contextualNodes = new Set<any>()
+  const vocabularyNodes = new Set<any>()
+  const unresolvedNodes = new Set<any>()
+  // Each binding is read once per site, for each way it is read. Read on
+  // every route instead, `const b = on ? a : a` doubles the work with
+  // each link of a chain. A read that stopped at a variable on its route
+  // could read more from another, so it is not remembered.
+  const readBindings = new Map<any, Set<string>>()
 
   const push = (value: string, node: any) => {
     const string = { value, node }
-    contextualStrings.push(string)
-    if (resolvedCalls === 0) vocabularyStrings.push(string)
+    if (!contextualNodes.has(node)) {
+      contextualNodes.add(node)
+      contextualStrings.push(string)
+    }
+    if (resolvedCalls === 0 && !vocabularyNodes.has(node)) {
+      vocabularyNodes.add(node)
+      vocabularyStrings.push(string)
+    }
+  }
+
+  const unread = (node: any) => {
+    if (unresolvedNodes.has(node)) return
+    unresolvedNodes.add(node)
+    unresolved.push(node)
+  }
+
+  const readBinding = (
+    variable: any,
+    steps: PatternStep[],
+    valuesMode: boolean,
+    read: () => void
+  ) => {
+    const key = `${valuesMode}:${resolvedCalls > 0}:${JSON.stringify(steps)}`
+    let keys = readBindings.get(variable)
+    if (keys?.has(key)) return
+    const stops = path.stops
+    path.add(variable)
+    read()
+    path.delete(variable)
+    if (path.stops !== stops) return
+    if (!keys) readBindings.set(variable, (keys = new Set()))
+    keys.add(key)
   }
 
   // The slot a destructured binding reads, followed through the branches
@@ -823,26 +930,27 @@ export function collectClassStrings(
           ? resolveIdentifier(value, context, path)
           : null
         if (!resolved) {
-          unresolved.push(value)
+          unread(value)
           return
         }
-        path.add(resolved.variable)
-        visitThrough(resolved.init, [...resolved.steps, ...steps], valuesMode)
-        path.delete(resolved.variable)
+        const route = [...resolved.steps, ...steps]
+        readBinding(resolved.variable, route, valuesMode, () =>
+          visitThrough(resolved.init, route, valuesMode)
+        )
         return
       }
       case "ArrayExpression":
       case "ObjectExpression": {
         const projected = projectStatic(value, steps)
         if (projected.steps.length === steps.length) {
-          unresolved.push(value)
+          unread(value)
           return
         }
         visitThrough(projected.init, projected.steps, valuesMode)
         return
       }
       default:
-        unresolved.push(node)
+        unread(node)
     }
   }
 
@@ -856,7 +964,7 @@ export function collectClassStrings(
       if (path.has(forwarded.variable)) return
       path.add(forwarded.variable)
       for (const alternative of forwarded.alternatives) {
-        if ("unresolved" in alternative) unresolved.push(alternative.unresolved)
+        if ("unresolved" in alternative) unread(alternative.unresolved)
         else visit(alternative.value, valuesMode)
       }
       path.delete(forwarded.variable)
@@ -875,7 +983,7 @@ export function collectClassStrings(
           // A glued interpolation leaves no class of its own.
           if (i > 0 && !/^\s/.test(text)) text = text.replace(/^\S+/, "")
           if (i < node.expressions.length && !/\s$/.test(text))
-            text = text.replace(/\S+$/, "")
+            text = text.replace(/(?<!\S)\S+$/, "")
           if (text.trim()) push(text, quasi)
         })
         node.expressions.forEach((expr: any, i: number) => {
@@ -885,7 +993,7 @@ export function collectClassStrings(
             (before !== "" && !/\s$/.test(before)) ||
             (after !== "" && !/^\s/.test(after))
           if (glued) {
-            if (!unresolved.includes(node)) unresolved.push(node)
+            unread(node)
           } else visit(expr, valuesMode)
         })
         return
@@ -906,7 +1014,7 @@ export function collectClassStrings(
           for (const arg of node.arguments) visit(arg, valuesMode)
           return
         }
-        unresolved.push(node)
+        unread(node)
         return
       case "ObjectExpression":
         for (const entry of objectEntries(node, context, path)) {
@@ -915,7 +1023,7 @@ export function collectClassStrings(
             // so an unreadable one still leaves the value to check.
             if (valuesMode && entry.unknown.type === "Property") {
               visit(entry.unknown.value, valuesMode)
-            } else unresolved.push(entry.unknown)
+            } else unread(entry.unknown)
           } else if (valuesMode) {
             visit(entry.value, valuesMode)
           } else {
@@ -952,25 +1060,26 @@ export function collectClassStrings(
           if (hopped) resolvedCalls--
           return
         }
-        unresolved.push(node)
+        if (resolve && visitVariantCall(node, valuesMode)) return
+        unread(node)
         return
       }
       case "Identifier": {
         if (node.name === "undefined") return
         const resolved = resolve ? resolveIdentifier(node, context, path) : null
         if (!resolved) {
-          unresolved.push(node)
+          unread(node)
           return
         }
-        path.add(resolved.variable)
-        visitThrough(resolved.init, resolved.steps, valuesMode)
-        path.delete(resolved.variable)
+        readBinding(resolved.variable, resolved.steps, valuesMode, () =>
+          visitThrough(resolved.init, resolved.steps, valuesMode)
+        )
         return
       }
       case "MemberExpression": {
         const found = resolveMemberValue(node, context, path)
         if (!found.key || "unresolved" in found) {
-          unresolved.push(node)
+          unread(node)
           return
         }
         if (found.variable) path.add(found.variable)
@@ -989,8 +1098,51 @@ export function collectClassStrings(
         visit(node.expression, valuesMode)
         return
       default:
-        unresolved.push(node)
+        unread(node)
     }
+  }
+
+  // `restyle({ tone })` through `const restyle = cva(...)`: every
+  // variant is a possible output, so the definition is read whole, as a
+  // hop so its own site keeps the vocabulary check. A class passed in
+  // the call is merged in. A tv with slots returns functions, not
+  // classes, so it is left unread.
+  const visitVariantCall = (node: any, valuesMode: boolean) => {
+    if (node.callee?.type !== "Identifier") return false
+    const resolved = resolveIdentifier(node.callee, context, path)
+    if (!resolved || resolved.steps.length) return false
+    const init = unwrapTs(resolved.init)
+    if (init?.type !== "CallExpression") return false
+    const callee = dottedName(init.callee)
+    if (!callee || !valueHelpers.has(callee)) return false
+    const hasSlots = init.arguments.some((arg: any) => {
+      const config = resolveObject(arg, context, path)
+      if (!config) return false
+      const slots = resolveProperty(config, "slots", context, path)
+      return slots.value !== undefined || slots.uncertain
+    })
+    if (hasSlots) return false
+    readBinding(resolved.variable, [], valuesMode, () =>
+      visit(init, valuesMode)
+    )
+    for (const arg of node.arguments) {
+      const props = unwrapTs(arg)
+      if (props?.type !== "ObjectExpression") {
+        unread(arg)
+        continue
+      }
+      for (const prop of props.properties) {
+        if (prop.type !== "Property") {
+          unread(prop)
+          continue
+        }
+        const key = keyName(prop)
+        if (key === null) unread(prop)
+        else if (key === "class" || key === "className")
+          visit(prop.value, false)
+      }
+    }
+    return true
   }
 
   // In a cva or tv config, `defaultVariants` and the selectors inside
@@ -1003,7 +1155,7 @@ export function collectClassStrings(
     }
     for (const prop of node.properties) {
       if (prop.type !== "Property") {
-        unresolved.push(prop)
+        unread(prop)
         continue
       }
       switch (keyName(prop)) {
@@ -1211,6 +1363,17 @@ function sharedFor(context: any, options: SiteOptions): Shared {
   return shared
 }
 
+// Nodes whose noncomputed string key is a name, not a value.
+const PROPERTY_KEY_PARENTS = new Set([
+  "Property",
+  "PropertyDefinition",
+  "MethodDefinition",
+  "AccessorProperty",
+  "TSPropertySignature",
+  "TSAbstractPropertyDefinition",
+  "TSAbstractMethodDefinition",
+])
+
 // Calls `onSite` for every class site in the file.
 export function classSiteVisitors(
   context: any,
@@ -1247,23 +1410,34 @@ export function classSiteVisitors(
   // element rendered in its place still wears the component's own
   // classes, so the component itself judges them: `<Button
   // render={<a />} className="p-4" />` is a Button, and so is the `<a>`
-  // when the classes are written on it instead.
-  const resolvedOf = (element: any) => {
+  // when the classes are written on it instead. A component that adds
+  // no classes, a trigger that only hands its props to Base UI, has no
+  // look to own, so the plain element is left to itself.
+  const resolvedOf = (element: any, attribute = "className") => {
     if (!element) return null
     const rendered = reader.renderedElementOf?.(element)
-    const resolved = rendered && tracker.resolveName(reader.nameOf(rendered))
+    const resolved =
+      rendered && tracker.resolveName(reader.nameOf(rendered), attribute)
     if (resolved) {
       return {
         ...resolved,
         wrapper: resolved.wrapper ?? reader.nameOf(element)?.text ?? "",
       }
     }
-    const own = tracker.resolveName(reader.nameOf(element))
+    const own = tracker.resolveName(reader.nameOf(element), attribute)
     if (own) return own
     const owner = reader.parentElementOf(element)
-    return owner && reader.renderedElementOf?.(owner) === element
-      ? tracker.resolveName(reader.nameOf(owner))
-      : null
+    if (!owner || reader.renderedElementOf?.(owner) !== element) return null
+    const judge = tracker.resolveName(reader.nameOf(owner), attribute)
+    if (
+      judge?.file &&
+      !judge.wrapper &&
+      reader.nameOf(element)?.component === false &&
+      addsNoClasses(judge.file, judge.component)
+    ) {
+      return null
+    }
+    return judge
   }
 
   const enclosingOf = (
@@ -1330,12 +1504,13 @@ export function classSiteVisitors(
     let list = sites.get(node)
     if (list) return list
     const element = reader.elementOf(node)
+    const attribute = reader.attributeName(node)
     list = [
       siteFor(
         node,
         reader.attributeValue(node),
-        reader.attributeName(node),
-        resolvedOf(element),
+        attribute,
+        resolvedOf(element, attribute),
         element
       ),
     ]
@@ -1356,7 +1531,6 @@ export function classSiteVisitors(
     )
     if (object) {
       const element = reader.elementOf(node)
-      const resolved = resolvedOf(element)
       const finals = new Map<string, any>()
       for (const entry of objectEntries(object, context, new Set())) {
         if ("key" in entry && isClassAttribute(entry.key)) {
@@ -1364,7 +1538,7 @@ export function classSiteVisitors(
         }
       }
       for (const [key, value] of finals) {
-        list.push(siteFor(value, value, key, resolved, element))
+        list.push(siteFor(value, value, key, resolvedOf(element, key), element))
       }
     }
     sites.set(node, list)
@@ -1448,6 +1622,14 @@ export function classSiteVisitors(
               return
             if (reportedStrings.has(node) || claimedVocabulary.has(node)) return
             if (node.parent?.type === "ImportDeclaration") return
+            // A plain key names an API field, not a class. Class object keys
+            // (cn({ "bg-red-500": on })) are reached by their class site.
+            if (
+              PROPERTY_KEY_PARENTS.has(node.parent?.type) &&
+              node.parent.key === node &&
+              !node.parent.computed
+            )
+              return
             const strings = [{ value: node.value, node }]
             emit({
               contextualStrings: strings,

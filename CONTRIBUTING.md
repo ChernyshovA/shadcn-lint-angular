@@ -152,9 +152,14 @@ After building, run:
 
 ```bash
 pnpm --filter shadcn-lint-angular exec node scripts/smoke-install.mjs
+pnpm --filter shadcn-lint-angular run test:types
 ```
 
 This packs the package, installs it with ESLint and Oxlint in a temporary
 project outside the workspace, and lints a small fixture. It checks the
 exports, the build, optional parser resolution, packaged README, and
-user-facing messages. It requires network access to install dependencies.
+user-facing messages. The type test installs the tarball into separate ESLint 9
+and 10 projects, checks ESM and CommonJS configs with `skipLibCheck: false`,
+and requires invalid rule options to fail. Both need network access to install
+dependencies. Rule-map annotations use `Linter.Config["rules"]`, which allows
+omitted rules; `RulesRecord` describes the complete rule vocabulary.

@@ -315,3 +315,69 @@ describe("imported component identity", () => {
     })
   })
 })
+
+test("nested namespace members resolve through grouped barrels", () => {
+  const DIALOG = path.join(PROJECT, "components/ui/dialog.tsx")
+  const kit = 'import * as UI from "@/components/kit"'
+  // `export * as Button from "./ui/button"`.
+  clearWrapperCache()
+  expect(identities(kit, "UI.Button.Button")).toEqual({
+    tracked: { component: "Button", file: BUTTON, wrapper: null },
+    wrapped: { component: "Button", file: BUTTON },
+  })
+  // `import * as Dialog from "./ui/dialog"; export { Dialog }`.
+  clearWrapperCache()
+  expect(identities(kit, "UI.Dialog.DialogTrigger")).toEqual({
+    tracked: { component: "DialogTrigger", file: DIALOG, wrapper: null },
+    wrapped: { component: "DialogTrigger", file: DIALOG },
+  })
+  // A namespace is not a component.
+  clearWrapperCache()
+  expect(identities(kit, "UI.Button")).toEqual({ tracked: null, wrapped: null })
+  // A named import joins the path the way a one-level member does.
+  clearWrapperCache()
+  expect(
+    identities(
+      'import { Button as B } from "@/components/ui/button"',
+      "B.Group.Item"
+    )
+  ).toEqual({
+    tracked: { component: "ButtonGroupItem", file: BUTTON, wrapper: null },
+    wrapped: { component: "ButtonGroupItem", file: BUTTON },
+  })
+  // Unresolvable under componentImports: the joined name, as for <UI.Button>.
+  clearWrapperCache()
+  expect(
+    identities('import * as UI from "missing-kit"', "UI.Button.Root", [
+      "missing-kit",
+    ])
+  ).toEqual({
+    tracked: { component: "ButtonRoot", file: null, wrapper: null },
+    wrapped: { component: "ButtonRoot", file: null },
+  })
+})
+
+test("named namespace members resolve before their names are joined", () => {
+  const primitives = "@/components/ui/primitives"
+  // `export * as Controls from "./button"`.
+  clearWrapperCache()
+  expect(
+    identities(`import { Controls } from "${primitives}"`, "Controls.Button")
+  ).toEqual({
+    tracked: { component: "Button", file: BUTTON, wrapper: null },
+    wrapped: { component: "Button", file: BUTTON },
+  })
+  // A package part is not the ui component its joined name matches,
+  // imported directly or through the ui file's re-export.
+  clearWrapperCache()
+  expect(
+    identities('import { Field } from "parts-kit/field"', "Field.Label")
+  ).toEqual({ tracked: null, wrapped: null })
+  clearWrapperCache()
+  expect(
+    identities(
+      `import { FieldPrimitive } from "${primitives}"`,
+      "FieldPrimitive.Label"
+    )
+  ).toEqual({ tracked: null, wrapped: null })
+})

@@ -125,8 +125,13 @@ The rule follows imports, re-exports, and wrappers that forward
 `className`, including a Base UI `render` prop: the classes on
 `<DialogTrigger render={<Button />} className="...">` belong to Button. A
 plain element such as `render={<a />}`, or a `render` value the rule
-cannot read, leaves them on the component itself. A wrapper
-uses the underlying component's contract and variant suggestions.
+cannot read, leaves them on the component itself. Classes written on a
+plain element rendered by a component that adds no classes, such as a
+trigger that only spreads its props onto Base UI, are not checked. A wrapper
+uses the underlying component's contract and variant suggestions. Each
+class prop follows its own path: a wrapper's `headerClassName` handed to
+CardHeader is checked against CardHeader, and one the wrapper does not
+hand to a design-system component is not checked.
 
 It also reads same-file values and known class helpers:
 
@@ -168,7 +173,9 @@ class every one allows. See [Angular](../angular.md#component-names).
 - A class the grammar cannot classify is reported as `unclassified`,
   even with `allow: ["layout"]`. Allow a custom class by name when needed.
   A class your CSS declares with `@utility` is classified by the
-  properties its body sets. One your CSS declares some other way is
+  properties its body sets, and so is one from a package your theme
+  imports: tw-animate-css's `animate-in` and `fade-in` are `motion`.
+  One your CSS declares some other way is
   reported as `unclassified`, in words that do not treat it as a
   misspelling.
 - Contracts match class names and groups, not every equivalent CSS effect.

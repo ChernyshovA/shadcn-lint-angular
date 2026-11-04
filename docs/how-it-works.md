@@ -7,7 +7,10 @@ them. It analyzes source code without running your app.
 
 `components.json` points to your UI directory. The linter reads its
 exported components and resolves imports through `@/`, tsconfig `paths`,
-package `imports`, and workspace package `exports`.
+package `imports`, and workspace package `exports`. It reads `paths` from
+the root `tsconfig.json`, `jsconfig.json` or `tsconfig.base.json`, the
+first that has any, so an Nx workspace's `tsconfig.base.json` is read past
+a solution-style `tsconfig.json`.
 
 It follows re-exports and renamed imports back to the defining file:
 
@@ -118,6 +121,12 @@ Tailwind runs in a worker thread because its loader is asynchronous.
 Answers are cached per theme. If Tailwind or the theme cannot load, the
 rule warns and uses a [grammar fallback](./rules/no-unknown-classes.md).
 
+The linter waits up to 60 seconds for the worker's first answer and 30
+seconds for later ones. A worker that misses that wait is restarted once,
+with a warning, and the file being checked uses the grammar fallback. Set
+`SHADCN_LINT_TAILWIND_TIMEOUT` to a number of milliseconds to change both
+waits.
+
 A theme CSS that declares tokens without importing Tailwind — the usual
 shape for a component package — knows no base utilities, so the rule
 would report every stock class. When `components.json` names such a file,
@@ -141,6 +150,12 @@ the same file. Spacing findings suggest values from the `size` axis.
 
 The file can come from the UI directory or a resolved import, including
 a barrel. Variant suggestions work without `components.json`.
+
+A factory kept in its own module counts too. When `button.tsx` imports
+`buttonVariants` from `./button-variants` or `@/components/ui/button-variants`,
+that factory is read for `Button`. Only the name that matches the
+component is followed, and only into the project: a factory imported
+from a package is not read.
 
 In a `.svelte` or `.vue` component the scripts are read, including
 Svelte's `<script module>`. When the component's own file has no
@@ -177,6 +192,12 @@ sets, the way an arbitrary property is: `@utility heading-2xs { font-size:
 layout. A body that sets more than one thing takes the first appearance it
 carries. A class declared with a plain selector has no body to read and
 stays `unclassified`.
+
+The same holds for a package your theme imports. With `@import
+"tw-animate-css"`, `animate-in` comes from the package's `@theme` and
+`fade-in` or `slide-in-from-top-1` from its `@utility` rules, which set
+the custom properties its enter and exit keyframes read, so all of them
+are `motion`.
 
 Utilities Tailwind still generates under their Tailwind 3 names read as
 the utilities they are: `flex-grow` and `flex-shrink-0` classify with
@@ -236,9 +257,30 @@ export function SaveButton({
 ```
 
 Wrapper chains can cross files and use namespace imports such as
-`<W.SaveButton>`. They are separate from the one-hop limit on class
+`<W.SaveButton>`. A nested namespace, `<UI.Button.Root>` through
+`export * as Button from "./button"`, resolves segment by segment. They are separate from the one-hop limit on class
 values. A props spread counts as forwarding only if it still contains
 `className`. If several targets qualify, the first supplies the contract.
+
+Each class prop follows its own path. A wrapper that hands
+`headerClassName` to CardHeader gets CardHeader's contract for it, while
+its `className` keeps Card's:
+
+```tsx
+export function Panel({ className, headerClassName }: PanelProps) {
+  return (
+    <Card className={className}>
+      <CardHeader className={headerClassName} />
+    </Card>
+  )
+}
+
+// Checked against CardHeader's contract, not Card's.
+;<Panel headerClassName="px-6" />
+```
+
+A class prop the wrapper does not hand to a design-system component is
+not checked. In Svelte and Vue wrappers, only `class` is followed.
 
 A `render` prop forwards the same way. Base UI renders another component
 in a trigger's place, and the `className` goes with it:
@@ -263,6 +305,19 @@ the component or on the element:
 <Button render={<a href="/" className="p-4" />} />
 ```
 
+A component that provably adds no classes has no look to own, so a
+plain element it renders is left to itself. The proof is strict: a
+plain function whose body only returns a self-closing Base UI part with
+its props spread and static `data-*` attributes, the way a shadcn
+`PopoverTrigger` does. A wrapper call around it, a class of its own, a
+package component, or a file that cannot be read keeps the component's
+contract in charge.
+
+```tsx
+// Passes: PopoverTrigger adds no classes, so the button owns its look.
+<PopoverTrigger render={<button className="rounded-full" />} />
+```
+
 When the value cannot be read, a variable or a function that renders
 without spreading its props, the classes stay on the trigger and its
 own contract decides.
@@ -282,7 +337,8 @@ Svelte and Vue components forward `class` the same way. See
   `classNames`, including calls outside JSX. Add functions through
   `mergeFunctions` and `variantFunctions` in shared settings or rule options.
   A dotted name such as `h.Class` matches a method call.
-- Same-file variables and object values, one hop deep.
+- Same-file variables and object values, one hop deep, including a call
+  to a same-file `cva` or `tv` result, which may produce any variant.
 - Readable objects spread onto elements, including nested spreads and
   computed keys.
 - `style` attributes, `<style>` elements, and SVG color attributes:

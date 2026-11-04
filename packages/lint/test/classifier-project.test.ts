@@ -226,6 +226,30 @@ describe("theme scales refresh and fail safe", () => {
     expect(groupOf("rounded-pill", page)).toBe("rounded")
   })
 
+  // A pnpm or bun workspace links the package into node_modules, and
+  // the theme imports it by name.
+  test("a workspace package imported by name counts", () => {
+    const { write, page } = createProject(
+      `@import "tailwindcss";\n@import "acme-tokens/tokens.css";`
+    )
+    const tokens = write(
+      "packages/tokens/package.json",
+      JSON.stringify({
+        name: "acme-tokens",
+        exports: { "./tokens.css": "./tokens.css" },
+      })
+    )
+    write(
+      "packages/tokens/tokens.css",
+      "@theme { --color-foreground: #111; --text-body: 0.875rem; }"
+    )
+    const link = path.join(path.dirname(page), "node_modules/acme-tokens")
+    fs.mkdirSync(path.dirname(link), { recursive: true })
+    fs.symlinkSync(path.dirname(tokens), link, "dir")
+    expect(groupOf("text-body", page)).toBe("font-size")
+    expect(groupOf("text-foreground", page)).toBe("text-color")
+  })
+
   test("a reset drops the names declared before it", () => {
     const { page } = createProject(
       "@theme { --radius-card: 8px; --radius-*: initial; --radius-fresh: 4px; }"
@@ -233,6 +257,37 @@ describe("theme scales refresh and fail safe", () => {
     expect(groupOf("rounded-card", page)).toBeNull()
     expect(groupOf("rounded-lg", page)).toBeNull()
     expect(groupOf("rounded-fresh", page)).toBe("rounded")
+  })
+
+  // Tailwind derives p-4 and border-spacing-0 from --spacing, so setting
+  // it after a reset brings the numeric scale back.
+  test("--spacing after a full reset keeps the numeric spacing scale", () => {
+    const { page } = createProject(`@theme static { --*: initial; }
+@theme static {
+  --spacing: 0.25rem;
+  --spacing-sidebar: 15.5rem;
+}`)
+    expect(groupOf("p-4", page)).toBe("p")
+    expect(groupOf("border-spacing-0", page)).toBe("border-spacing")
+    expect(groupOf("w-sidebar", page)).toBe("w")
+    expect(groupOf("rounded-lg", page)).toBeNull()
+  })
+
+  test("--spacing after a spacing reset keeps the numeric spacing scale", () => {
+    const { page } = createProject(
+      "@theme { --spacing-*: initial; --spacing: 0.25rem; --spacing-sidebar: 15.5rem; }"
+    )
+    expect(groupOf("p-4", page)).toBe("p")
+    expect(groupOf("border-spacing-0", page)).toBe("border-spacing")
+    expect(groupOf("w-sidebar", page)).toBe("w")
+  })
+
+  test("--spacing before a reset does not survive it", () => {
+    const { page } = createProject(
+      "@theme { --spacing: 0.25rem; --*: initial; --spacing-sidebar: 15.5rem; }"
+    )
+    expect(groupOf("p-4", page)).not.toBe("p")
+    expect(groupOf("p-sidebar", page)).toBe("p")
   })
 })
 

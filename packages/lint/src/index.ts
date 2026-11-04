@@ -25,12 +25,14 @@ export const project = {
 // they are named here.
 //
 // This block is the single source; scripts/postbuild.mjs copies it into
-// dist, once for each of @eslint/core's dual types, because the dts
-// bundler drops augmentations. Keep it self-contained, and in step with
+// dist for both supported @eslint/core majors and their ESM/CJS types.
+// Properties here are required: ConfigObject applies Partial<Rules>,
+// while optional properties violate RulesConfig's index signature.
+// Keep this self-contained, and in step with
 // plugin.rules (test/eslint-completion.test.ts checks both).
 declare module "@eslint/core" {
   interface RulesConfig {
-    "shadcn/no-restyle"?: import("@eslint/core").RuleConfig<
+    "shadcn/no-restyle": import("@eslint/core").RuleConfig<
       [
         {
           allow?: string[]
@@ -78,7 +80,7 @@ declare module "@eslint/core" {
         },
       ]
     >
-    "shadcn/no-raw-colors"?: import("@eslint/core").RuleConfig<
+    "shadcn/no-raw-colors": import("@eslint/core").RuleConfig<
       [
         {
           allow?: string[]
@@ -98,7 +100,7 @@ declare module "@eslint/core" {
         },
       ]
     >
-    "shadcn/no-arbitrary-values"?: import("@eslint/core").RuleConfig<
+    "shadcn/no-arbitrary-values": import("@eslint/core").RuleConfig<
       [
         {
           allow?: string[]
@@ -118,7 +120,7 @@ declare module "@eslint/core" {
         },
       ]
     >
-    "shadcn/no-inline-styles"?: import("@eslint/core").RuleConfig<
+    "shadcn/no-inline-styles": import("@eslint/core").RuleConfig<
       [
         {
           allow?: string[]
@@ -134,7 +136,7 @@ declare module "@eslint/core" {
         },
       ]
     >
-    "shadcn/require-static-classes"?: import("@eslint/core").RuleConfig<
+    "shadcn/require-static-classes": import("@eslint/core").RuleConfig<
       [
         {
           message?: string
@@ -145,7 +147,7 @@ declare module "@eslint/core" {
         },
       ]
     >
-    "shadcn/no-unknown-classes"?: import("@eslint/core").RuleConfig<
+    "shadcn/no-unknown-classes": import("@eslint/core").RuleConfig<
       [
         {
           allow?: string[]

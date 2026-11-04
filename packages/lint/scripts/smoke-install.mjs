@@ -3,6 +3,7 @@
 // with ESLint and with Oxlint. Catches what unit tests cannot: the
 // exports map, the ESM build and its worker, the optional oxc-parser, the copied
 // README, and the messages users see. Run: node scripts/smoke-install.mjs
+// --tarball /path/pkg.tgz tests an existing candidate on another runtime.
 
 import { execSync, spawnSync } from "node:child_process"
 import * as fs from "node:fs"
@@ -37,11 +38,19 @@ const expect = (label, out, needle) => {
 
 try {
   // 1. Pack.
-  const packOut = run(
-    `pnpm pack --pack-destination ${JSON.stringify(dir)}`,
-    PKG_DIR
-  )
-  const tarball = packOut.trim().split("\n").pop()
+  const flag = process.argv.indexOf("--tarball")
+  let tarball
+  if (flag !== -1) {
+    if (!process.argv[flag + 1]) throw new Error("--tarball needs a path")
+    tarball = path.join(dir, "candidate.tgz")
+    fs.copyFileSync(path.resolve(process.argv[flag + 1]), tarball)
+  } else {
+    const packOut = run(
+      `pnpm pack --pack-destination ${JSON.stringify(dir)}`,
+      PKG_DIR
+    )
+    tarball = packOut.trim().split("\n").pop()
+  }
   const listing = run(`tar -tzf ${JSON.stringify(tarball)}`)
   expect("tarball has the ESM build", listing, "package/dist/index.js")
   expect(
@@ -128,7 +137,7 @@ try {
 
   // 3. Install from the tarball, plus the linters.
   run(
-    `pnpm add -D --ignore-workspace ${JSON.stringify(tarball)} eslint@9 @typescript-eslint/parser oxlint tailwindcss@4`
+    `pnpm add -D --ignore-workspace ${JSON.stringify(tarball)} eslint@9.39.5 @typescript-eslint/parser@8.72.1 oxlint@1.91.0 tailwindcss@4.3.4 @angular-eslint/template-parser@22.6.0 @angular-eslint/eslint-plugin-template@22.6.0`
   )
   const installed = JSON.parse(
     fs.readFileSync(
@@ -227,6 +236,68 @@ try {
     oout,
     /^(?![\s\S]*could not be consulted)/
   )
+
+  // 6. The Angular setup from the guide, from the installed package:
+  // external templates and the actual inline-template processor.
+  write(
+    "app/app.component.html",
+    '<div class="bg-pink-500" style="color: red"></div>'
+  )
+  write(
+    "app/app.component.ts",
+    `import { Component } from "@angular/core";
+@Component({selector: "app-root", templateUrl: "./app.component.html"})
+export class AppComponent {}
+@Component({selector: "inline-demo", template: '<div class="bg-pink-500" style="color: red"></div>'})
+export class InlineComponent {}
+`
+  )
+  write(
+    "eslint.angular.config.mjs",
+    `import { plugin as shadcn } from "shadcn-lint-angular";
+import parser from "@typescript-eslint/parser";
+import templateParser from "@angular-eslint/template-parser";
+import templatePlugin from "@angular-eslint/eslint-plugin-template";
+const rules = { "shadcn/no-raw-colors": "error", "shadcn/no-inline-styles": "error" };
+export default [
+  { files: ["**/*.ts"], languageOptions: { parser }, processor: templatePlugin.processors["extract-inline-html"], plugins: { shadcn }, rules },
+  { files: ["**/*.html"], languageOptions: { parser: templateParser }, plugins: { shadcn }, rules },
+];
+`
+  )
+  const angular = spawnSync(
+    "npx",
+    [
+      "eslint",
+      "-c",
+      "eslint.angular.config.mjs",
+      "--format",
+      "json",
+      "app/app.component.html",
+      "app/app.component.ts",
+    ],
+    { cwd: dir, encoding: "utf-8", shell: process.platform === "win32" }
+  )
+  if (angular.error) throw angular.error
+  const results = JSON.parse(angular.stdout)
+  for (const extension of ["html", "ts"]) {
+    const result = results.find((item) =>
+      item.filePath.endsWith(`app.component.${extension}`)
+    )
+    const messages = result?.messages ?? []
+    expect(
+      `angular ${extension}: palette and inline styles`,
+      JSON.stringify(messages.map((item) => item.ruleId).sort()),
+      JSON.stringify(["shadcn/no-inline-styles", "shadcn/no-raw-colors"])
+    )
+    if (extension === "ts") {
+      expect(
+        "angular inline suggestions stay suppressed",
+        JSON.stringify(messages),
+        /^(?![\s\S]*"suggestions")/
+      )
+    }
+  }
 } finally {
   fs.rmSync(dir, { recursive: true, force: true })
 }

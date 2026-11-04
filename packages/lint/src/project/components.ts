@@ -98,7 +98,13 @@ function buildIndex(dir: string) {
     for (const [name, binding] of exportsOf(file, new Set(), deps)) {
       // `export default memo(Button)` is still a Button by name.
       const component = name === "default" ? binding.name : name
-      if (/^[A-Z]/.test(component) && !files.has(component)) {
+      // `export * as Button from "./button"` names a namespace, not a
+      // component.
+      if (
+        binding.name !== "*" &&
+        /^[A-Z]/.test(component) &&
+        !files.has(component)
+      ) {
         files.set(component, binding.file)
       }
     }

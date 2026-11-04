@@ -158,7 +158,8 @@ Using `deny` alone lets other unknown classes pass, including typos.
 If Tailwind or the theme cannot load, the rule uses the bundled class
 grammar, discovered `@utility` names, and CSS class selectors. A failed
 theme build produces a warning. Other projects in the same run continue
-using their own themes.
+using their own themes. A Tailwind worker that crashes or times out also
+produces a warning; see [the worker's timeouts](../how-it-works.md#tailwind-classes).
 
 This fallback checks less: it accepts arbitrary variant prefixes and
 some invented values, and provides no spelling suggestions. For example,
@@ -171,6 +172,9 @@ clean result. See [caching](../how-it-works.md#caching).
   [no-restyle](./no-restyle.md) for component rules.
 - Markers, arbitrary properties, and known CSS class selectors bypass
   the Tailwind query. This rule does not validate their CSS behavior.
+- A class longer than 10,000 characters or with more than 64 variants,
+  far past real-world use, is not checked. Neither is a class that
+  makes Tailwind or one of its plugins throw.
 - `allow: ["layout"]` can exempt `hovr:flex` because matching uses the
   base class. Allow external classes by name rather than broad category.
 - Unclassified names such as `flex-cols` are not layout. On a component,

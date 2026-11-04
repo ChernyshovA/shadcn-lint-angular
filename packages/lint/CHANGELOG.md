@@ -1,5 +1,17 @@
 # shadcn-lint-angular
 
+## 0.1.2
+
+### Patch Changes
+
+- Update the fork to `@shadcn/lint 0.2.5` (`529de36`), retaining Angular templates, styles, directive contracts and the inline-suggestion safeguard.
+
+  - Replace the local SVG and Nx fixes with upstream implementations. An empty or solution-style root tsconfig now falls back to `tsconfig.base.json`.
+  - Share stylesheet resolution between theme discovery and the Tailwind worker. Keep conditional CSS `#imports` and Angular preprocessor exports; reject script-only or invalid exports instead of silently reading adjacent CSS.
+  - Include upstream fixes for component wrappers, variant discovery, theme colors and worker recovery. Worker timeouts are configurable through `SHADCN_LINT_TAILWIND_TIMEOUT`.
+  - Update development dependencies, including Tailwind 4.3.4 and tsdown 0.13.1, while retaining Node 20.19 support.
+  - Fix declarations for `skipLibCheck: false` and rule-option checking on ESLint 9.39.5 and 10.14.0, including ESM and CommonJS consumers. Use `Linter.Config["rules"]` for partial rule-map annotations, as shown in the updated setup examples.
+
 ## 0.1.1
 
 - No changes: the code and the README are 0.1.0's.

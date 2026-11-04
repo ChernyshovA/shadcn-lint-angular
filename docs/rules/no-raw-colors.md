@@ -62,7 +62,8 @@ Tailwind also reads a color from the utility's own namespace before
 `--color-*`. `--background-color-surface` declares `bg-surface`,
 `--text-color-ink` declares `text-ink`, and `--border-color-edge`
 declares `border-edge`. Such a token counts for that utility only:
-`text-surface` is still undeclared.
+`text-surface` is still undeclared. `divide-*` also reads
+`--border-color-*`, as in Tailwind, so `divide-edge` is declared too.
 
 ### SVG attributes
 
@@ -72,11 +73,13 @@ Use `currentColor` with a text color class, or reference a theme variable:
 // Allowed.
 <svg className="text-primary" fill="currentColor" />
 <svg fill="var(--color-primary)" />
+<svg fill="oklch(var(--primary-oklch) / 0.2)" />
 
 // Reported.
 <svg fill="#ec4899" />
 <svg fill={"#ec4899"} />
 <path stroke="red" />
+<path stroke="oklch(var(--primary-oklch, 0.62 0.19 260))" />
 ````
 
 The rule checks literal strings in `fill`, `stroke`, `color`,
@@ -84,6 +87,11 @@ The rule checks literal strings in `fill`, `stroke`, `color`,
 and in `stop-color`, `flood-color`, and `lighting-color`, the way HTML,
 Vue and Svelte templates spell them.
 Class exceptions do not exempt these attributes.
+
+A color function whose channels are a single theme variable, such as
+`oklch(var(--primary-oklch))`, takes its color from the theme and passes.
+The alpha after `/` can be a number, a percentage, or another `var()`.
+Literal channels and a `var()` with a fallback are still reported.
 
 ### Allow an exception
 

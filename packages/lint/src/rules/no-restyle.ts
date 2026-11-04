@@ -7,6 +7,7 @@ import { componentsFor } from "../project/components"
 import { NODE_MODULES } from "../project/fs"
 import { declaresClass } from "../project/theme"
 import { sizeNamesFor, variantNamesFor } from "../project/variants"
+import { wrapperPropOf } from "../project/wrappers"
 import { classSiteVisitors, type ClassSite } from "../sites/collect"
 import { readerFor } from "../sites/readers"
 import { angularRestyle } from "./angular-restyle"
@@ -40,7 +41,7 @@ const messageSchema = {
 const NOT_ALLOWED = '"{{className}}" is not allowed on <{{component}}>:'
 const OWNS = "<{{component}}> owns its {{category}}."
 const OWNS_VIA_WRAPPER =
-  "<{{wrapper}}> forwards className to <{{component}}>, which owns its {{category}}."
+  "<{{wrapper}}> forwards {{prop}} to <{{component}}>, which owns its {{category}}."
 const NEW_VARIANT_GUARD =
   "only if the design explicitly calls for a treatment none of these provides."
 const SPACING_SIZES =
@@ -135,7 +136,7 @@ export const noRestyle = {
     return classSiteVisitors(context, options, (site) => {
       const judge = angular
         ? angular.judgeOf(site)
-        : componentJudge(site, contracts, filename)
+        : componentJudge(site, contracts, filename, options.ui)
       if (!judge) return
       // Read once per subject, on its first finding, like the variants.
       const reads = new Map<Subject, ReturnType<typeof readSubject>>()
@@ -163,6 +164,10 @@ export const noRestyle = {
             variants: variantNames,
             sizes: sizes?.join(", ") ?? "",
             wrapper: subject.wrapper ?? "",
+            prop:
+              site.attribute && wrapperPropOf(site.attribute) !== "className"
+                ? site.attribute
+                : "className",
             ...variantsAt,
           }
 
@@ -245,7 +250,8 @@ export type Subject = {
 function componentJudge(
   site: ClassSite,
   contracts: ReturnType<typeof compileContracts>,
-  filename: string | undefined
+  filename: string | undefined,
+  ui: string[] | undefined
 ): Judge | null {
   if (!site.component) return null
   const component = site.component
@@ -254,7 +260,7 @@ function componentJudge(
     component,
     wrapper: site.wrapper,
     around: (token) =>
-      aroundFor(site, contracts, component, token, filename) ?? "",
+      aroundFor(site, contracts, component, token, filename, ui) ?? "",
     read: () => ({
       known: !!file,
       variants: {
@@ -300,7 +306,8 @@ function aroundFor(
   contracts: ReturnType<typeof compileContracts>,
   component: string,
   token: string,
-  filename: string | undefined
+  filename: string | undefined,
+  ui: string[] | undefined
 ) {
   const accepts = (name: string) => contracts.decide(name, token).kind === "ok"
   const places: string[] = []
@@ -319,7 +326,7 @@ function aroundFor(
   const primitives = contracts.primitivesFor(
     token,
     container ? [component, container.name] : [component],
-    () => (filename ? componentsFor(filename).files.keys() : [])
+    () => (filename ? componentsFor(filename, ui).files.keys() : [])
   )
   if (primitives.length) places.push(listOf(primitives))
   const last = places.pop()
