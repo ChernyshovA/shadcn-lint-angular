@@ -19,7 +19,7 @@ import {
 } from "./angular-theme"
 import { projectFor } from "./components-json"
 import { isDirectory, isFile, mtimeOf, TTL } from "./fs"
-import { packageRoot, resolveFile } from "./resolve"
+import { resolveStylesheetImport } from "./stylesheets"
 import { themeScalesOf } from "./theme-scales"
 import { warnOnce } from "./warn"
 
@@ -50,6 +50,9 @@ type ThemeRead = {
   // Every custom property the project declares, in light mode, last
   // declaration winning: what tokens resolve to.
   values: Map<string, string>
+  // The values above that only a scoped selector such as `.compact`
+  // sets. A `:root` or `@theme` value replaces them.
+  scopedNames: Set<string>
   themeNames: Set<string>
   // In cascade order, resets included: what the scales are built from.
   declarations: Declaration[]
@@ -62,7 +65,7 @@ type ThemeRead = {
   modules: boolean
   files: string[]
   // Retried with the signature, so a corrected alias invalidates too.
-  missingImports: { spec: string; fromDir: string; rootDir: string }[]
+  missingImports: { spec: string; fromDir: string }[]
   colors?: Map<string, Lab>
   scales?: Record<ScaleKind, Map<string, number>>
   themeScales?: ConfigExtension
@@ -175,14 +178,20 @@ function applyTokenDeclarations(
 const DARK_PRELUDE =
   /\.dark(?![\w-])|prefers-color-scheme\s*:\s*dark|data-(?:theme|mode)=["']?dark|@variant\s+dark\b/
 
+// `:root, :host` is how Tailwind writes its own theme.
+const ROOT_SELECTOR = /^(?::root|html|:host)$/
+
 // Dark-mode blocks are skipped, so the values are the light theme's.
-// Later declarations win, as in CSS.
+// Later declarations win, as in CSS, but a value set under `:root` or
+// `@theme` wins over one a scoped selector such as `.compact` sets: the
+// scoped value applies only inside that selector.
 export function parseDeclarations(css: string) {
   const values = new Map<string, string>()
+  const scopedNames = new Set<string>()
   const themeNames = new Set<string>()
   const declarations: { name: string; value: string; theme: boolean }[] = []
   const stripped = stripComments(css)
-  const stack: { theme: boolean; dark: boolean }[] = []
+  const stack: { theme: boolean; dark: boolean; scoped: boolean }[] = []
   let start = 0
   for (let i = 0; i < stripped.length; i++) {
     const char = stripped[i]
@@ -192,20 +201,31 @@ export function parseDeclarations(css: string) {
       stack.push({
         theme: (outer?.theme ?? false) || /^@theme\b/.test(prelude),
         dark: (outer?.dark ?? false) || DARK_PRELUDE.test(prelude),
+        scoped:
+          (outer?.scoped ?? false) ||
+          (!prelude.startsWith("@") &&
+            !prelude.split(",").every((s) => ROOT_SELECTOR.test(s.trim()))),
       })
       start = i + 1
     } else if (char === "}" || char === ";") {
       const statement = stripped.slice(start, i)
-      const match = statement.match(
-        /^\s*--((?:[\w-]+\*?)|\*)\s*:\s*([\s\S]+?)\s*$/
-      )
+      // Greedy, then trimmed: a lazy value retries the trailing \s*$ at
+      // every character of a run of whitespace inside it.
+      const match = statement.match(/^\s*--((?:[\w-]+\*?)|\*)\s*:\s*([\s\S]+)$/)
       const scope = stack[stack.length - 1]
       if (match && !scope?.dark) {
-        values.set(match[1], match[2])
+        // A value of only whitespace keeps its one character.
+        const value = match[2].trimEnd() || match[2]
+        const scoped = scope?.scoped ?? false
+        if (!scoped || !values.has(match[1]) || scopedNames.has(match[1])) {
+          values.set(match[1], value)
+          if (scoped) scopedNames.add(match[1])
+          else scopedNames.delete(match[1])
+        }
         if (scope?.theme) themeNames.add(match[1])
         declarations.push({
           name: match[1],
-          value: match[2],
+          value,
           theme: scope?.theme ?? false,
         })
       }
@@ -213,14 +233,23 @@ export function parseDeclarations(css: string) {
       start = i + 1
     }
   }
-  return { values, themeNames, declarations }
+  return { values, scopedNames, themeNames, declarations }
 }
 
-// Null when a variable has no value and no fallback.
+// Far past any real theme value. A value that names a variable k times,
+// each naming another k times, grows as k^6 through six levels: k = 10
+// builds 4MB, and a larger k passes V8's longest string. Every
+// substitution spends its length and one more from a budget shared by
+// the whole resolution.
+const RESOLVE_BUDGET = 100_000
+
+// Null when a variable has no value and no fallback, or when resolving
+// the value would spend more than the budget.
 export function resolveVariables(
   value: string,
   values: Map<string, string>,
-  depth = 0
+  depth = 0,
+  budget = { left: RESOLVE_BUDGET }
 ): string | null {
   if (!value.includes("var(")) return value
   if (depth > 6) return null
@@ -228,33 +257,57 @@ export function resolveVariables(
   const out = value.replace(
     /var\(\s*--([\w-]+)\s*(?:,\s*([^()]*(?:\([^()]*\)[^()]*)*))?\)/g,
     (_, name: string, fallback: string | undefined) => {
+      if (failed) return ""
       const inner = values.get(name) ?? fallback
       if (inner === undefined) {
         failed = true
         return ""
       }
-      const resolved = resolveVariables(inner.trim(), values, depth + 1)
-      if (resolved === null) failed = true
+      const resolved = resolveVariables(inner.trim(), values, depth + 1, budget)
+      budget.left -= 1 + (resolved?.length ?? 0)
+      if (resolved === null || budget.left < 0) failed = true
       return resolved ?? ""
     }
   )
   return failed ? null : out
 }
 
+// An @import up to the end of its quoted id. The rest of the rule runs
+// to the next `;`, found with one indexOf: a `[^;]*` after each @import
+// rescans the rest of a file that has no `;` once per @import in it.
+const IMPORT_HEAD = /@import\s+(?:url\(\s*)?["']([^"']+)["']/g
+
 // Comments go first: a partial whose comment spells out the consumer's
 // `@import "tailwindcss"` does not import Tailwind.
 export function parseImports(css: string) {
   const out: string[] = []
-  const re = /@import\s+(?:url\(\s*)?["']([^"']+)["']\s*\)?[^;]*;/g
-  for (const match of stripComments(css).matchAll(re)) out.push(match[1])
+  const text = stripComments(css)
+  const re = new RegExp(IMPORT_HEAD)
+  for (let match = re.exec(text); match; match = re.exec(text)) {
+    const end = text.indexOf(";", re.lastIndex)
+    // No `;` ends this @import, so none ends a later one either.
+    if (end === -1) break
+    out.push(match[1])
+    re.lastIndex = end + 1
+  }
   return out
 }
 
-// The prefix a Tailwind import declares, if any.
+// The prefix a Tailwind import declares before the `;` that ends it, if
+// any.
 export function parseTailwindPrefix(css: string) {
-  const re =
-    /@import\s+(?:url\(\s*)?["']tailwindcss(?:\/[^"']*)?["']\s*\)?[^;]*?\bprefix\(\s*([\w-]+)\s*\)/g
-  for (const match of stripComments(css).matchAll(re)) return match[1]
+  const text = stripComments(css)
+  const re = new RegExp(IMPORT_HEAD)
+  for (let match = re.exec(text); match; match = re.exec(text)) {
+    if (!/^tailwindcss(?:\/|$)/.test(match[1])) continue
+    const end = text.indexOf(";", re.lastIndex)
+    const rest = text.slice(re.lastIndex, end === -1 ? text.length : end)
+    const prefix = /\bprefix\(\s*([\w-]+)\s*\)/.exec(rest)
+    if (prefix) return prefix[1]
+    // A Tailwind @import inside `rest` ends at the same `;`.
+    if (end === -1) break
+    re.lastIndex = end
+  }
   return null
 }
 
@@ -308,13 +361,10 @@ export function parseClassSelectors(css: string) {
   return out
 }
 
-const resolveStylesheetImport = (spec: string, dir: string, root: string) =>
-  resolveFile(spec, dir, root, [".css"], { stylesheet: true })
-
 // Whether an @import from a stylesheet in `dir` loads a stylesheet, as
 // the theme reads it.
 export function resolvesAsStylesheet(spec: string, dir: string) {
-  return resolveStylesheetImport(spec, dir, packageRoot(dir) ?? dir) !== null
+  return resolveStylesheetImport(dir, spec) !== null
 }
 
 function isPackageFile(file: string) {
@@ -349,8 +399,9 @@ function ownPackageOf(
   return dir === current ? dir : null
 }
 
-// Files under node_modules contribute @utility names and class selectors
-// (tw-animate-css declares animate-in that way) but not color tokens:
+// Files under node_modules contribute @utility names, class selectors and
+// @theme animations (tw-animate-css declares fade-in and animate-in those
+// ways) but not color tokens:
 // Tailwind's own palette is not the project's vocabulary. Workspace
 // packages resolve past node_modules and count as the project's own, and
 // so does a design system published as a package once themeImports
@@ -381,14 +432,13 @@ function readTheme(
   if (/@(?:config|plugin)\s/.test(stripComments(css))) read.modules = true
   // Imports come first in the cascade.
   const dir = path.dirname(cssFile)
-  const root = packageRoot(cssFile) ?? dir
   for (const spec of parseImports(css)) {
     if (spec === "tailwindcss" || spec.startsWith("tailwindcss/")) {
       read.tailwind = true
     }
-    const target = resolveStylesheetImport(spec, dir, root)
+    const target = resolveStylesheetImport(dir, spec)
     if (!target) {
-      read.missingImports.push({ spec, fromDir: dir, rootDir: root })
+      read.missingImports.push({ spec, fromDir: dir })
       continue
     }
     const own = ownPackageOf(spec, target, imports, ownPackage)
@@ -402,11 +452,26 @@ function readTheme(
     )
   }
   if (!fromPackage) {
-    const { values, themeNames, declarations } = parseDeclarations(css)
+    const { values, scopedNames, themeNames, declarations } =
+      parseDeclarations(css)
     applyTokenDeclarations(declarations, read.tokens, read.scoped)
-    for (const [name, value] of values) read.values.set(name, value)
+    for (const [name, value] of values) {
+      const scoped = scopedNames.has(name)
+      if (scoped && read.values.has(name) && !read.scopedNames.has(name)) {
+        continue
+      }
+      read.values.set(name, value)
+      if (scoped) read.scopedNames.add(name)
+      else read.scopedNames.delete(name)
+    }
     for (const name of themeNames) read.themeNames.add(name)
     read.declarations.push(...declarations)
+  } else if (css.includes("--animate-")) {
+    // A package's own @theme animations are generated all the same:
+    // tw-animate-css declares --animate-in there.
+    for (const name of parseDeclarations(css).themeNames) {
+      if (name.startsWith("animate-")) read.themeNames.add(name)
+    }
   }
 }
 
@@ -414,8 +479,8 @@ function signatureOf(read: ThemeRead) {
   return [
     ...read.files.map((file) => `${file}:${mtimeOf(file) ?? "missing"}`),
     ...read.missingImports.map(
-      ({ spec, fromDir, rootDir }) =>
-        `${fromDir}:${spec}:${resolveStylesheetImport(spec, fromDir, rootDir) ?? "missing"}`
+      ({ spec, fromDir }) =>
+        `${fromDir}:${spec}:${resolveStylesheetImport(fromDir, spec) ?? "missing"}`
     ),
   ].join("|")
 }
@@ -485,6 +550,7 @@ function themeAt(cssFile: string, imports: readonly RegExp[] = NO_IMPORTS) {
     utilities: new Map(),
     classes: new Set(),
     values: new Map(),
+    scopedNames: new Set(),
     themeNames: new Set(),
     declarations: [],
     tailwind: false,

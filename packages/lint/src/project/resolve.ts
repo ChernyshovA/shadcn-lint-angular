@@ -116,6 +116,56 @@ function expand(target: string, captured: string) {
   return target.replace("*", captured)
 }
 
+// A UNC path reaches the network on Windows: stat one and the OS sends
+// the user's credentials to whatever host it names.
+export function isUncPath(file: string) {
+  return /^[\\/]{2}/.test(file)
+}
+
+export function isInside(dir: string, file: string) {
+  const relative = path.relative(dir, file)
+  return (
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  )
+}
+
+// A UNC path outside the directories being linted. A project that lives
+// on a share still reaches its own files.
+export function isStrayUncPath(file: string, ...within: string[]) {
+  return isUncPath(file) && !within.some((dir) => isInside(dir, file))
+}
+
+const BAD_SEGMENT = /^(?:\.|%2e){1,2}$|^node_modules$/i
+
+// What Node refuses in a target or a `*` capture: walking up, reaching
+// into node_modules, and percent-encoded separators.
+function safeSegments(text: string) {
+  return (
+    !/%2f|%5c/i.test(text) &&
+    !text.split(/[\\/]/).some((segment) => BAD_SEGMENT.test(segment))
+  )
+}
+
+// An exports or imports target Node accepts as a file: "./" relative.
+export function isPackageTarget(target: string) {
+  return target.startsWith("./") && safeSegments(target.slice(2))
+}
+
+// The file a target names, expanded with its `*` capture, or null when
+// either would leave the package. Node treats that as no match.
+export function packageTarget(dir: string, target: string, captured = "") {
+  if (!isPackageTarget(target) || !safeSegments(captured)) return null
+  const file = path.resolve(dir, expand(target, captured))
+  return isInside(dir, file) ? file : null
+}
+
+// An imports target may also name a package, never a path or a URL.
+function isBareTarget(target: string) {
+  return /^[^./\\#][^:\\]*$/.test(target)
+}
+
 // Each entry keeps the directory its own tsconfig resolves against, and
 // the signature covers the whole `extends` chain.
 type PathEntry = { pattern: string; targets: string[]; base: string }
@@ -141,14 +191,26 @@ function readTsconfigChain(
   if (!json || typeof json !== "object") return []
   const dir = path.dirname(file)
   const options = json.compilerOptions ?? {}
-  const base = options.baseUrl ? path.resolve(dir, options.baseUrl) : dir
-  const own: PathEntry[] = Object.entries(options.paths ?? {}).map(
-    ([pattern, targets]) => ({
-      pattern,
-      targets: Array.isArray(targets) ? targets.map(String) : [],
-      base,
-    })
-  )
+  // TypeScript rejects a baseUrl, paths map or target that is not the
+  // type it expects; here it is ignored, since path.resolve throws on a
+  // non-string baseUrl.
+  const base =
+    typeof options.baseUrl === "string" && options.baseUrl
+      ? path.resolve(dir, options.baseUrl)
+      : dir
+  const paths =
+    options.paths &&
+    typeof options.paths === "object" &&
+    !Array.isArray(options.paths)
+      ? options.paths
+      : {}
+  const own: PathEntry[] = Object.entries(paths).map(([pattern, targets]) => ({
+    pattern,
+    targets: Array.isArray(targets)
+      ? targets.filter((target) => typeof target === "string")
+      : [],
+    base,
+  }))
   const parents = ([] as string[]).concat(json.extends ?? [])
   const inherited = parents.flatMap((parent) => {
     // A tsconfig's own `paths` never apply to its `extends`.
@@ -161,12 +223,20 @@ function readTsconfigChain(
 }
 
 // An Nx workspace keeps its paths in tsconfig.base.json, which each
-// project's tsconfig.json extends, and has no tsconfig.json at the root.
+// project's tsconfig.json extends. Its root tsconfig.json, when there is
+// one, is often solution-style: only `references`, no paths. So the first
+// file whose `extends` chain has paths wins, not the first that exists.
 export function tsconfigPaths(rootDir: string) {
-  const file = ["tsconfig.json", "jsconfig.json", "tsconfig.base.json"]
-    .map((name) => path.join(rootDir, name))
-    .find((candidate) => isFile(candidate))
-  if (!file) return []
+  for (const name of ["tsconfig.json", "jsconfig.json", "tsconfig.base.json"]) {
+    const file = path.join(rootDir, name)
+    if (!isFile(file)) continue
+    const entries = readTsconfig(file)
+    if (entries.length) return entries
+  }
+  return []
+}
+
+function readTsconfig(file: string) {
   // An empty file list is the seed below, which never validates.
   const cached = tsconfigCache.get(file)
   if (cached?.files.length && signatureOf(cached.files) === cached.signature) {
@@ -193,77 +263,97 @@ function readPackageJson(dir: string) {
   return json
 }
 
-// A stylesheet's @import reads only these conditions, as Tailwind does,
-// in the order a package writes them: tailwindcss maps "." to its
-// JavaScript under `import` and `require`.
+// Real exports nest conditions a few levels deep. Past this a manifest
+// has no target, rather than one that overflows the stack to find.
+export const MAX_CONDITION_DEPTH = 32
+
+const PREFERRED_CONDITIONS = ["import", "default", "require", "node", "types"]
 const STYLE_CONDITIONS = new Set(["style", "default"])
+const SCRIPT = /\.(?:[cm]?[jt]sx?|json|node)$/i
 
-// Whatever a condition maps to it, a script is never read as CSS.
-const SCRIPT = /\.(?:[cm]?[jt]sx?|json|node)$/
-
-function pickTarget(value: any, stylesheet = false): string | null {
-  if (typeof value === "string") {
-    return stylesheet && SCRIPT.test(value) ? null : value
-  }
+// The first target `valid` accepts, so an invalid one falls through to
+// the next fallback. Each condition is tried once: tried again among the
+// rest, a chain of `import` conditions with no target doubles the walk at
+// every level.
+function pickTarget(
+  value: any,
+  valid: (target: string) => boolean,
+  depth = 0,
+  stylesheet = false
+): string | null {
+  if (typeof value === "string") return valid(value) ? value : null
+  if (depth >= MAX_CONDITION_DEPTH) return null
   if (Array.isArray(value)) {
     for (const item of value) {
-      const picked = pickTarget(item, stylesheet)
+      const picked = pickTarget(item, valid, depth + 1, stylesheet)
       if (picked) return picked
     }
     return null
   }
   if (value && typeof value === "object") {
     if (stylesheet) {
-      for (const [key, target] of Object.entries(value)) {
+      for (const key of Object.keys(value)) {
         if (!STYLE_CONDITIONS.has(key)) continue
-        const picked = pickTarget(target, true)
+        const picked = pickTarget(value[key], valid, depth + 1, true)
         if (picked) return picked
       }
       return null
     }
-    for (const key of ["import", "default", "require", "node", "types"]) {
+    for (const key of PREFERRED_CONDITIONS) {
       if (key in value) {
-        const picked = pickTarget(value[key])
+        const picked = pickTarget(value[key], valid, depth + 1)
         if (picked) return picked
       }
     }
     for (const key of Object.keys(value)) {
-      if (key.startsWith(".")) continue
-      const picked = pickTarget(value[key])
+      if (key.startsWith(".") || PREFERRED_CONDITIONS.includes(key)) continue
+      const picked = pickTarget(value[key], valid, depth + 1)
       if (picked) return picked
     }
   }
   return null
 }
 
-// `"exports": "./x.css"` and `"exports": { "style": …, "default": … }`
-// are the "." export written short, as Node reads them.
+// The root export can be written as a target, conditions, or an array.
 function stylesheetExports(exports: any) {
   if (typeof exports === "string" || Array.isArray(exports)) {
     return { ".": exports }
   }
   if (!exports || typeof exports !== "object") return null
-  const keys = Object.keys(exports)
-  return keys.length && !keys.some((key) => key.startsWith("."))
-    ? { ".": exports }
-    : exports
+  return Object.keys(exports).some((key) => key.startsWith("."))
+    ? exports
+    : { ".": exports }
 }
 
-// Through an exports/imports map, longest key first.
+// Through an exports/imports map, longest key first: files inside `dir`,
+// or with `bare`, package specifiers an imports map points at.
 function mapSubpath(
   map: Record<string, any>,
   subpath: string,
+  dir: string,
+  bare = false,
   stylesheet = false
 ) {
   const keys = Object.keys(map)
     .filter((key) => key.startsWith(".") || key.startsWith("#"))
     .sort((a, b) => b.length - a.length)
-  const out: string[] = []
+  const out: { file?: string; spec?: string }[] = []
   for (const key of keys) {
     const captured = matchPattern(key, subpath)
-    if (captured === null) continue
-    const target = pickTarget(map[key], stylesheet)
-    if (target) out.push(expand(target, captured))
+    if (captured === null || !safeSegments(captured)) continue
+    const target = pickTarget(
+      map[key],
+      (t) => isPackageTarget(t) || (bare && isBareTarget(t)),
+      0,
+      stylesheet
+    )
+    if (!target) continue
+    if (!target.startsWith("./")) {
+      out.push({ spec: expand(target, captured) })
+      continue
+    }
+    const file = packageTarget(dir, target, captured)
+    if (file) out.push({ file })
   }
   return out
 }
@@ -308,6 +398,17 @@ export function candidatesFor(
   rootDir: string,
   options: ResolveOptions = {}
 ) {
+  return collectCandidates(spec, fromDir, rootDir, options).filter(
+    (candidate) => !isStrayUncPath(candidate, rootDir, fromDir)
+  )
+}
+
+function collectCandidates(
+  spec: string,
+  fromDir: string,
+  rootDir: string,
+  options: ResolveOptions
+) {
   const out: string[] = []
   if (
     spec.startsWith("./") ||
@@ -331,16 +432,36 @@ export function candidatesFor(
       }
     }
   }
-  const { stylesheet } = options
   if (spec.startsWith("#")) {
     const imports = readPackageJson(rootDir)?.imports
     if (imports && typeof imports === "object") {
-      for (const target of mapSubpath(imports, spec, stylesheet)) {
-        out.push(path.resolve(rootDir, target))
+      for (const target of mapSubpath(
+        imports,
+        spec,
+        rootDir,
+        true,
+        options.stylesheet
+      )) {
+        if (target.file) out.push(target.file)
+        // A package target resolves as a package, never as a path.
+        else if (target.spec)
+          packageCandidates(
+            target.spec,
+            rootDir,
+            out,
+            rootDir,
+            options.stylesheet
+          )
       }
       // A directory alias against a wildcard key ("#components/*").
-      for (const target of mapSubpath(imports, `${spec}/*`, stylesheet)) {
-        out.push(path.dirname(path.resolve(rootDir, target)))
+      for (const target of mapSubpath(
+        imports,
+        `${spec}/*`,
+        rootDir,
+        false,
+        options.stylesheet
+      )) {
+        if (target.file) out.push(path.dirname(target.file))
       }
     }
     return out
@@ -357,46 +478,65 @@ export function candidatesFor(
     out.push(path.join(rootDir, "src/lib", kit[1] ?? ""))
     return out
   }
+  packageCandidates(spec, rootDir, out, fromDir, options.stylesheet)
+  return out
+}
+
+function packageCandidates(
+  spec: string,
+  rootDir: string,
+  out: string[],
+  fromDir = rootDir,
+  stylesheet = false
+) {
   const pkg = splitPackageSpecifier(spec)
-  if (!pkg) return out
+  if (!pkg) return
   const dir =
     selfPackageDirectory(pkg.name, rootDir) ??
     selfPackageDirectory(pkg.name, fromDir) ??
     packageDirectory(pkg.name, rootDir) ??
     packageDirectory(pkg.name, fromDir)
-  if (!dir) return out
+  if (!dir) return
   const subpath = pkg.subpath ? `./${pkg.subpath}` : "."
   const manifest = readPackageJson(dir)
   const exportsMap = stylesheet
     ? stylesheetExports(manifest?.exports)
     : manifest?.exports
   if (exportsMap && typeof exportsMap === "object") {
-    for (const target of mapSubpath(exportsMap, subpath, stylesheet)) {
-      out.push(path.resolve(dir, target))
+    for (const target of mapSubpath(
+      exportsMap,
+      subpath,
+      dir,
+      false,
+      stylesheet
+    )) {
+      if (target.file) out.push(target.file)
     }
     // A directory alias against a wildcard key ("./components/*").
-    for (const target of mapSubpath(exportsMap, `${subpath}/*`, stylesheet)) {
-      out.push(path.dirname(path.resolve(dir, target)))
+    for (const target of mapSubpath(
+      exportsMap,
+      `${subpath}/*`,
+      dir,
+      false,
+      stylesheet
+    )) {
+      if (target.file) out.push(path.dirname(target.file))
     }
   }
-  // Tailwind's mainFields: a package without exports names its CSS in
-  // `style`, as primeicons does.
-  if (
-    stylesheet &&
-    !pkg.subpath &&
-    manifest?.exports == null &&
-    typeof manifest?.style === "string"
-  ) {
-    out.push(path.resolve(dir, manifest.style))
+  // An exports map owns stylesheet resolution, including a missing or
+  // script-only export. Falling back to index.css would read another theme.
+  if (stylesheet && manifest?.exports != null) return
+  if (stylesheet && !pkg.subpath && typeof manifest?.style === "string") {
+    const file = path.resolve(dir, manifest.style)
+    if (isInside(dir, file)) out.push(file)
   }
-  if (pkg.subpath) {
-    out.push(path.join(dir, pkg.subpath))
-    out.push(path.join(dir, "src", pkg.subpath))
-  } else {
-    out.push(dir)
-    out.push(path.join(dir, "src"))
+  // The package's own files, never a path that walks out of it.
+  const own = pkg.subpath
+    ? [path.join(dir, pkg.subpath), path.join(dir, "src", pkg.subpath)]
+    : [dir, path.join(dir, "src")]
+  for (const file of own) {
+    if (isInside(dir, file)) out.push(file)
   }
-  return out
 }
 
 export function resolveDirectory(
@@ -422,6 +562,7 @@ function resolveFileUncached(
   options: ResolveOptions = {}
 ) {
   for (const candidate of candidatesFor(spec, fromDir, rootDir, options)) {
+    if (options.stylesheet && SCRIPT.test(candidate)) return null
     if (isFile(candidate)) return realpath(candidate)
     const ext = path.extname(candidate)
     for (const source of SOURCE_FOR_JS[ext] ?? []) {

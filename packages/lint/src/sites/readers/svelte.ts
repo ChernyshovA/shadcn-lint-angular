@@ -89,10 +89,18 @@ export const svelteReader: TemplateReader = {
     const name = element?.name
     if (!name) return null
     const member = name.type === "SvelteMemberExpressionName"
-    const root = member ? name.object?.name : name.name
+    // `<UI.Button.Root>`: the root is the innermost object, the property
+    // the dotted path after it.
+    const parts: string[] = []
+    let object = name
+    while (object?.type === "SvelteMemberExpressionName") {
+      parts.unshift(object.property?.name ?? "")
+      object = object.object
+    }
+    const root = object?.name
     return {
       root: typeof root === "string" ? root : "",
-      property: member ? (name.property?.name ?? "") : null,
+      property: member ? parts.join(".") : null,
       text: nameText(name),
       component: element.kind === "component",
     }
@@ -115,6 +123,14 @@ export const svelteReader: TemplateReader = {
     },
   },
   styleProperties: {
+    // `<Button --tone="red">` sets a custom property on the component;
+    // Svelte compiles it to an inline style on a wrapper.
+    SvelteAttribute(node) {
+      const name = node.key?.name
+      return typeof name === "string" && name.startsWith("--")
+        ? { property: name, value: valueOf(node) ?? node.key }
+        : null
+    },
     // `style:color={value}` sets one property.
     SvelteStyleDirective(node) {
       const property = node.key?.name?.name

@@ -16,11 +16,26 @@ function jsxNameText(jsxName: any): string {
   return jsxName?.name ?? ""
 }
 
-// The `Dialog` of `<Dialog.Content>`.
+// The `Dialog` of `<Dialog.Content>`, the `UI` of `<UI.Button.Root>`.
 export function jsxRootOf(jsxName: any) {
-  return jsxName?.type === "JSXMemberExpression"
-    ? jsxName.object?.name
-    : jsxName?.name
+  let node = jsxName
+  while (node?.type === "JSXMemberExpression") {
+    node = node.object
+  }
+  return node?.name
+}
+
+// The `Button.Root` of `<UI.Button.Root>`, dotted as written.
+function jsxPropertyOf(jsxName: any) {
+  const parts: string[] = []
+  for (
+    let node = jsxName;
+    node?.type === "JSXMemberExpression";
+    node = node.object
+  ) {
+    parts.unshift(node.property?.name ?? "")
+  }
+  return parts.join(".")
 }
 
 export function jsxElementNameOf(name: any) {
@@ -29,7 +44,7 @@ export function jsxElementNameOf(name: any) {
   const member = name.type === "JSXMemberExpression"
   return {
     root: typeof root === "string" ? root : "",
-    property: member ? (name.property?.name ?? "") : null,
+    property: member ? jsxPropertyOf(name) : null,
     text: jsxNameText(name),
     component:
       member || (name.type === "JSXIdentifier" && /^[A-Z]/.test(name.name)),

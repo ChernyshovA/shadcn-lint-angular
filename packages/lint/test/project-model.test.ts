@@ -216,10 +216,9 @@ describe("a stylesheet's package import", () => {
     expect(css("#theme")).toBe("src/theme.css")
   })
 
-  // Tailwind fails on such an import. The linter reads the package's
-  // index.css when it has one, as it does without exports, and never its
-  // JavaScript.
-  test("a package whose exports map only scripts falls back to its index.css", () => {
+  // Tailwind fails on such an import. An adjacent index.css is not the
+  // stylesheet the app builds, even when it happens to exist.
+  test("a package whose exports map only scripts has no stylesheet", () => {
     pkg(
       "scripts",
       {
@@ -232,7 +231,7 @@ describe("a stylesheet's package import", () => {
     pkg("bare", { exports: { ".": { import: "./dist/index.mjs" } } }, [
       "dist/index.mjs",
     ])
-    expect(css("scripts")).toBe("node_modules/scripts/index.css")
+    expect(css("scripts")).toBeNull()
     expect(css("bare")).toBeNull()
   })
 })
@@ -544,8 +543,177 @@ describe("components.json with a bare ui alias", () => {
   })
 })
 
-// Nx keeps the workspace's paths in a root tsconfig.base.json, which each
-// project's tsconfig.json extends; the root has no tsconfig.json.
+// A tsconfig TypeScript would reject still must not crash every rule:
+// the malformed option is read as absent.
+describe("tsconfig with malformed paths options", () => {
+  let root: string
+  function write(name: string, source: string) {
+    const file = path.join(root, name)
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, source)
+    return file
+  }
+  beforeEach(() => {
+    resetFsMemo()
+    root = fs.realpathSync.native(
+      fs.mkdtempSync(path.join(os.tmpdir(), "shadcn-lint-tsconfig-"))
+    )
+    write("package.json", "{}")
+    write("components.json", JSON.stringify({ aliases: { ui: "@/ui" } }))
+    write("src/ui/button.tsx", "export function Button() { return null }")
+  })
+  afterEach(() => {
+    resetFsMemo()
+    fs.rmSync(root, { recursive: true, force: true })
+  })
+
+  function lint(file: string) {
+    return new Linter({ cwd: root }).verify(
+      'import { Button } from "@/ui/button"\nexport const Page = () => <Button className="rounded-full" />',
+      {
+        files: ["**/*.tsx"],
+        languageOptions: {
+          parser,
+          parserOptions: { ecmaFeatures: { jsx: true } },
+        },
+        plugins: { shadcn: plugin },
+        rules: { "shadcn/no-restyle": "error" },
+      } as any,
+      { filename: file }
+    )
+  }
+
+  test.each([
+    ["a number", 1],
+    ["a boolean", true],
+    ["an object", {}],
+    ["an array", ["."]],
+    ["empty", ""],
+  ])("a baseUrl that is %s is ignored", (_, baseUrl) => {
+    write(
+      "tsconfig.json",
+      JSON.stringify({
+        compilerOptions: { baseUrl, paths: { "@/*": ["./src/*"] } },
+      })
+    )
+    const page = write("src/app/page.tsx", "")
+    expect(tsconfigPaths(root)).toEqual([
+      { pattern: "@/*", targets: ["./src/*"], base: root },
+    ])
+    expect(lint(page).map((m) => m.ruleId)).toEqual(["shadcn/no-restyle"])
+  })
+
+  test.each([
+    ["a number", 1],
+    ["a string", "./src/*"],
+    ["an array", ["./src/*"]],
+    ["null", null],
+  ])("a paths map that is %s is ignored", (_, paths) => {
+    write("tsconfig.json", JSON.stringify({ compilerOptions: { paths } }))
+    const page = write("src/app/page.tsx", "")
+    expect(tsconfigPaths(root)).toEqual([])
+    expect(() => lint(page)).not.toThrow()
+  })
+
+  test("targets that are not a list of strings are skipped", () => {
+    write(
+      "tsconfig.json",
+      JSON.stringify({
+        compilerOptions: {
+          paths: { "@/*": [1, null, { x: 1 }, "./src/*"], "#/*": "./src/*" },
+        },
+      })
+    )
+    const page = write("src/app/page.tsx", "")
+    expect(tsconfigPaths(root)).toEqual([
+      { pattern: "@/*", targets: ["./src/*"], base: root },
+      { pattern: "#/*", targets: [], base: root },
+    ])
+    expect(lint(page).map((m) => m.ruleId)).toEqual(["shadcn/no-restyle"])
+  })
+})
+
+// Conditions nest a few levels in a real manifest. One nested past any
+// reason has no target, and finding that out must not overflow the stack.
+describe("package exports with deeply nested conditions", () => {
+  let root: string
+  function write(name: string, source: string) {
+    const file = path.join(root, name)
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, source)
+    return file
+  }
+  // JSON.stringify recurses, so the nesting is spelled out as text.
+  function nested(depth: number, target: string) {
+    return `${'{"import":'.repeat(depth)}${JSON.stringify(target)}${"}".repeat(depth)}`
+  }
+  function manifest(conditions: string) {
+    write(
+      "node_modules/@acme/ui/package.json",
+      `{ "name": "@acme/ui", "exports": { "./components/*": ${conditions} } }`
+    )
+  }
+  beforeEach(() => {
+    resetFsMemo()
+    root = fs.realpathSync.native(
+      fs.mkdtempSync(path.join(os.tmpdir(), "shadcn-lint-conditions-"))
+    )
+    write("package.json", "{}")
+    write(
+      "components.json",
+      JSON.stringify({ aliases: { ui: "@acme/ui/components" } })
+    )
+    write(
+      "node_modules/@acme/ui/src/components/button.tsx",
+      "export function Button(props) { return <button {...props} /> }"
+    )
+  })
+  afterEach(() => {
+    resetFsMemo()
+    fs.rmSync(root, { recursive: true, force: true })
+  })
+
+  function lint(file: string) {
+    return new Linter({ cwd: root }).verify(
+      'import { Button } from "@acme/ui/components/button"\nexport const Page = () => <Button className="rounded-full" />',
+      {
+        files: ["**/*.tsx"],
+        languageOptions: {
+          parser,
+          parserOptions: { ecmaFeatures: { jsx: true } },
+        },
+        plugins: { shadcn: plugin },
+        rules: { "shadcn/no-restyle": "error" },
+      } as any,
+      { filename: file }
+    )
+  }
+
+  test("a few levels of conditions still resolve", () => {
+    manifest(
+      `{ "node": { "types": "./src/components/*.d.ts", "import": ${nested(4, "./src/components/*")} } }`
+    )
+    const page = write("src/app/page.tsx", "")
+    expect(uiDirectory(projectFor(page)!)).toBe(
+      path.join(root, "node_modules/@acme/ui/src/components")
+    )
+    expect(lint(page).map((m) => m.ruleId)).toEqual(["shadcn/no-restyle"])
+  })
+
+  test.each([
+    ["conditions", nested(20000, "./src/components/*")],
+    [
+      "fallback arrays",
+      `${"[".repeat(20000)}"./src/components/*"${"]".repeat(20000)}`,
+    ],
+  ])("%s nested 20,000 deep have no target", (_, conditions) => {
+    manifest(conditions)
+    const page = write("src/app/page.tsx", "")
+    expect(() => uiDirectory(projectFor(page)!)).not.toThrow()
+    expect(() => lint(page)).not.toThrow()
+  })
+})
+
 describe("an Nx workspace", () => {
   let root: string
   function write(name: string, source: string) {
@@ -588,13 +756,35 @@ describe("an Nx workspace", () => {
     expect(tsconfigPaths(root).map((entry) => entry.pattern)).toEqual([
       "@acme/ui/*",
     ])
-    // A tsconfig.json at the root is read instead.
-    write("tsconfig.json", JSON.stringify({ compilerOptions: { paths: {} } }))
-    resetFsMemo()
-    expect(tsconfigPaths(root)).toEqual([])
   })
 
-  // shadcn-ui/lint#111.
+  test("reads it past a solution-style tsconfig.json with no paths", () => {
+    write(
+      "tsconfig.json",
+      JSON.stringify({ files: [], references: [{ path: "./apps/web" }] })
+    )
+    expect(tsconfigPaths(root).map((entry) => entry.pattern)).toEqual([
+      "@acme/ui/*",
+    ])
+  })
+
+  test("reads it past a tsconfig.json with empty paths that does not extend it", () => {
+    write("tsconfig.json", JSON.stringify({ compilerOptions: { paths: {} } }))
+    expect(tsconfigPaths(root).map((entry) => entry.pattern)).toEqual([
+      "@acme/ui/*",
+    ])
+  })
+
+  test("a tsconfig.json with its own paths still wins", () => {
+    write(
+      "tsconfig.json",
+      JSON.stringify({ compilerOptions: { paths: { "@/*": ["./src/*"] } } })
+    )
+    expect(tsconfigPaths(root).map((entry) => entry.pattern)).toEqual(["@/*"])
+  })
+
+  // shadcn-ui/lint#111: with paths only in tsconfig.base.json, the ui
+  // alias did not resolve and no component was recognized.
   test("resolves the ui alias through it, with no warning", () => {
     write(
       "components.json",

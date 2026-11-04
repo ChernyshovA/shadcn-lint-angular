@@ -11,7 +11,11 @@ import {
   splitClasses,
   withBase,
 } from "../grammar/classes"
-import { isNamedColor, parseColor } from "../grammar/colors"
+import {
+  isNamedColor,
+  parseColor,
+  withoutVariableChannelColors,
+} from "../grammar/colors"
 import { projectClassifierFor } from "../project/namespaces"
 import {
   colorTokensFor,
@@ -43,17 +47,16 @@ const FIXED = new Set(["white", "black"])
 // SVG paint takes none: fill-none and stroke-none paint nothing.
 const PAINT_PREFIXES = new Set(["fill-", "stroke-"])
 
-// Attributes that take a color directly. JSX spells the SVG ones in
-// camelCase; HTML templates, Vue and Svelte with a hyphen.
+// Attributes that take a color directly, as JSX and as markup spell them.
 const COLOR_ATTRIBUTES = new Set([
   "fill",
   "stroke",
   "color",
   "stopColor",
-  "floodColor",
-  "lightingColor",
   "stop-color",
+  "floodColor",
   "flood-color",
+  "lightingColor",
   "lighting-color",
 ])
 
@@ -74,6 +77,7 @@ const COLOR_FUNCTION =
 export function isRawColorValue(value: string) {
   const trimmed = value.trim()
   if (ATTRIBUTE_ALLOWED.has(trimmed)) return false
+  if (!withoutVariableChannelColors(trimmed).trim()) return false
   if (COLOR_FUNCTION.test(trimmed)) return true
   return isNamedColor(trimmed)
 }
@@ -110,6 +114,12 @@ const PREFIX_NAMESPACES: Record<string, string> = {
   "drop-shadow": "drop-shadow-color",
   fill: "fill",
   stroke: "stroke",
+}
+
+// Namespaces a utility reads after its own and before --color-*, as in
+// Tailwind 4.3.3: divide-* reads --divide-color-*, then --border-color-*.
+const FALLBACK_NAMESPACES: Record<string, string[]> = {
+  "divide-color": ["border-color"],
 }
 
 // The @theme namespace a color utility reads before --color-*: "bg-"
@@ -282,12 +292,17 @@ export const noRawColors = {
       return !!suggestion && categoryOf(groupOf(suggestion)) !== "color"
     }
 
-    // The tokens this utility can name: --color-* plus its own namespace.
+    // The tokens this utility can name: --color-* plus its own namespace
+    // and the ones it falls back to.
     const tokensFor = (prefix: string) => {
       const { declared, scoped } = themeFor()
       const namespace = colorNamespaceOf(prefix)
-      const own = namespace ? scoped?.get(namespace) : null
-      if (!own?.size) return declared
+      const own = namespace
+        ? [namespace, ...(FALLBACK_NAMESPACES[namespace] ?? [])].flatMap(
+            (name) => [...(scoped?.get(name) ?? [])]
+          )
+        : []
+      if (!own.length) return declared
       return new Set([...(declared ?? []), ...own])
     }
 
